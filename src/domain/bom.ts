@@ -7,58 +7,117 @@ import type { Db } from '../db/pool.js';
 import { assertCan, assertIndependent, visibleSites } from '../core/permissions.js';
 import { audit } from '../core/audit.js';
 import { badRequest, forbidden, invalidState, notFound, staleVersion } from '../core/errors.js';
+import { ARTICLE_STATUS, COMMODITIES, PACKINGS, packPcs, fillEans, getColours } from './catalog.js';
 
 const ANY = { anySite: true } as const;
 export const SECTIONS = ['FABRIC', 'TRIM', 'CUP', 'PACKING', 'PROCESS', 'WIP'] as const;
 export type Section = (typeof SECTIONS)[number];
 export type Colour = { code: string; name: string };
-export type LineInput = { section: Section; itemId: string; qty: string; wastagePct?: string; sizes?: string[] | null; colours?: string[] | null; qtyBySize?: Record<string, string>; note?: string };
+export type LineInput = { section: Section; itemId: string; qty: string; wastagePct?: string; sizes?: string[] | null; colours?: string[] | null; cups?: string[] | null; qtyBySize?: Record<string, string>; note?: string };
 
 const NUM = /^\d+(\.\d{1,4})?$/;
 const num = (v: unknown) => Number(v);
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const clean = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
-export const skuCode = (style: string, colour: string, size: string) => `${style}-${colour}-${clean(size)}`;
+export const skuCode = (style: string, colour: string, size: string, cup = '') => `${style}-${colour}-${cup ? cup + '-' : ''}${clean(size)}`;
 
-// ───────────────────────── styles ─────────────────────────
-function checkSizesColours(sizes: string[], colours: Colour[]) {
+// ───────────────────────── styles (finished-goods articles) ─────────────────────────
+// A style is the finished-goods article, the same as the CRM app's article master: code, name, brand, category, colours,
+// cups, sizes, packing, rate and MRP per piece, HSN and commodity type, and a status of active, close or disable.
+export type ArticleInput = {
+  brandId?: string | null; categoryId?: string | null; commodity?: string | null; cups?: string[]; packing?: string;
+  rate?: string | null; mrp?: string | null; launchedOn?: string | null;
+};
+const MONEY = /^\d{1,10}(\.\d{1,2})?$/;
+function checkSizesColours(sizes: string[], colours: Colour[], cups: string[] = []) {
   if (!Array.isArray(sizes) || !sizes.length || sizes.length > 24) throw badRequest('List 1 to 24 sizes');
   const seen = new Set<string>();
   for (const s of sizes) { if (!s.trim() || s.length > 8) throw badRequest(`Size "${s}" is empty or longer than 8 characters`); if (seen.has(clean(s))) throw badRequest(`Size "${s}" is listed twice`); seen.add(clean(s)); }
   const cs = new Set<string>();
   for (const c of colours) {
     if (!/^[A-Z0-9]{2,5}$/.test(c.code)) throw badRequest(`Colour code "${c.code}": 2 to 5 capital letters or digits, like BLK`);
-    if (!c.name?.trim()) throw badRequest(`Colour ${c.code} needs a name`);
     if (cs.has(c.code)) throw badRequest(`Colour code ${c.code} is used twice`); cs.add(c.code);
   }
   if (colours.length > 40) throw badRequest('Up to 40 colours');
+  const cu = new Set<string>();
+  for (const c of cups) { if (!/^[A-Z]{1,3}$/.test(c)) throw badRequest(`Cup "${c}": 1 to 3 capital letters, like B or DD`); if (cu.has(c)) throw badRequest(`Cup ${c} is listed twice`); cu.add(c); }
+  if (cups.length > 8) throw badRequest('Up to 8 cups');
+}
+/** Colours come from the Colours master: the code must be there, and its name is the master's name. */
+async function resolveColours(db: Db, colours: (Colour | { code: string; name?: string } | string)[], keep: Colour[] = []) {
+  const codes = colours.map((c) => (typeof c === 'string' ? c : c.code).trim().toUpperCase());
+  const known = new Map((await getColours(db, codes)).map((c) => [c.code, c]));
+  return codes.map((code) => {
+    if (!/^[A-Z0-9]{2,5}$/.test(code)) throw badRequest(`Colour code "${code}": 2 to 5 capital letters or digits, like BLK`);
+    const m = known.get(code);
+    if (!m) throw badRequest(`Colour ${code} is not in the Colours master. Add it there first`);
+    if (m.status !== 'active' && !keep.some((k) => k.code === code)) throw badRequest(`Colour ${code} (${m.name}) is switched off in the Colours master`);
+    return { code, name: m.name as string };
+  });
+}
+/** Brand, category, packing, prices and dates of an article, with the category's HSN and commodity type as defaults. */
+async function articleFields(db: Db, i: ArticleInput & { hsnCode?: string; gstRate?: string }, before?: Record<string, unknown>) {
+  const pick = <T>(v: T | undefined, k: string) => (v === undefined ? (before?.[k] as T) : v);
+  const brandId = pick(i.brandId, 'brand_id') || null; const categoryId = pick(i.categoryId, 'category_id') || null;
+  const brand = brandId ? (await db.query('SELECT id, name, status FROM brand WHERE id=$1', [brandId])).rows[0] : null;
+  if (brandId && !brand) throw notFound('Brand');
+  if (brand && brand.status !== 'active' && brandId !== before?.brand_id) throw badRequest(`Brand ${brand.name} is switched off`);
+  const cat = categoryId ? (await db.query('SELECT * FROM product_category WHERE id=$1', [categoryId])).rows[0] : null;
+  if (categoryId && !cat) throw notFound('Category');
+  if (cat && cat.status !== 'active' && categoryId !== before?.category_id) throw badRequest(`Category ${cat.name} is switched off`);
+  const packing = pick(i.packing, 'packing') ?? 'Single piece';
+  if (!PACKINGS.some((p) => p.name === packing)) throw badRequest(`Packing: one of ${PACKINGS.map((p) => p.name).join(', ')}`);
+  const commodity = (pick(i.commodity, 'commodity') as string | null) || (cat?.commodity as string | null) || null;
+  if (commodity && !(COMMODITIES as readonly string[]).includes(commodity)) throw badRequest(`Commodity type: one of ${COMMODITIES.join(', ')}`);
+  const rate = pick(i.rate, 'rate') ?? null, mrp = pick(i.mrp, 'mrp') ?? null;
+  for (const [v, l] of [[rate, 'Rate per piece'], [mrp, 'MRP per piece']] as const) if (v != null && v !== '' && !MONEY.test(String(v))) throw badRequest(`${l}: rupees, up to 2 decimals`);
+  if (rate && mrp && Number(mrp) < Number(rate)) throw badRequest('MRP per piece is below the rate per piece');
+  const launchedOn = pick(i.launchedOn, 'launched_on') || null;
+  if (launchedOn && !/^\d{4}-\d{2}-\d{2}$/.test(String(launchedOn))) throw badRequest('Launch date: YYYY-MM-DD');
+  const hsn = i.hsnCode?.trim() || (before?.hsn_code as string | null) || (cat?.hsn_code as string | null) || null;
+  if (hsn && !/^\d{4}(\d{2}){0,2}$/.test(hsn)) throw badRequest('HSN code: 4, 6 or 8 digits');
+  const gst = i.gstRate || (before?.gst_rate as string | null) || (cat?.gst_rate as string | null) || null;
+  if (gst && !(num(gst) >= 0 && num(gst) <= 40)) throw badRequest('GST rate: 0 to 40');
+  return { brandId, categoryId, category: (cat?.name as string | undefined) ?? null, commodity, packing, pcs: packPcs(packing), rate: rate === '' ? null : rate, mrp: mrp === '' ? null : mrp, launchedOn, hsn, gst };
 }
 
-export async function createStyle(ctx: Ctx, i: { code: string; name: string; category?: string; description?: string; hsnCode?: string; gstRate?: string; sizes: string[]; colours: Colour[] }) {
+export async function createStyle(ctx: Ctx, i: ArticleInput & { code: string; name: string; category?: string; description?: string; hsnCode?: string; gstRate?: string; sizes: string[]; colours: (Colour | { code: string; name?: string } | string)[] }) {
   await assertCan(ctx.db, ctx.actor.id, 'bom.create', ANY);
   const code = (i.code ?? '').trim().toUpperCase();
-  if (!/^[A-Z0-9][A-Z0-9-]{1,15}$/.test(code)) throw badRequest('Style code: 2 to 16 capital letters, digits or dashes, like BRF-01');
-  if (!i.name?.trim()) throw badRequest('Give the style a name');
-  const sizes = i.sizes.map((s) => s.trim()); const colours = i.colours.map((c) => ({ code: c.code.trim().toUpperCase(), name: c.name.trim() }));
-  checkSizesColours(sizes, colours);
-  if (i.gstRate && !(num(i.gstRate) >= 0 && num(i.gstRate) <= 40)) throw badRequest('GST rate: 0 to 40');
-  if ((await ctx.db.query('SELECT 1 FROM product_style WHERE code=$1 OR lower(name)=lower($2)', [code, i.name.trim()])).rowCount) throw badRequest('A style with this code or name already exists');
-  const r = (await ctx.db.query(`INSERT INTO product_style(code,name,category,description,hsn_code,gst_rate,sizes,colours,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-    [code, i.name.trim(), i.category?.trim() || null, i.description?.trim() || null, i.hsnCode?.trim() || null, i.gstRate || null, sizes, JSON.stringify(colours), ctx.actor.id])).rows[0];
-  await audit(ctx, { action: 'style.create', entityType: 'product_style', entityId: r.id, after: { code, name: r.name, sizes, colours } });
+  if (!/^[A-Z0-9][A-Z0-9-]{1,15}$/.test(code)) throw badRequest('Article code: 2 to 16 capital letters, digits or dashes, like KL-101');
+  if (!i.name?.trim()) throw badRequest('Give the article a name');
+  const sizes = i.sizes.map((s) => s.trim()); const cups = (i.cups ?? []).map((c) => c.trim().toUpperCase()).filter(Boolean);
+  const raw = i.colours.map((c) => ({ code: (typeof c === 'string' ? c : c.code).trim().toUpperCase(), name: 'x' }));
+  checkSizesColours(sizes, raw, cups);
+  const colours = await resolveColours(ctx.db, i.colours);
+  const a = await articleFields(ctx.db, i);
+  if ((await ctx.db.query('SELECT 1 FROM product_style WHERE code=$1 OR lower(name)=lower($2)', [code, i.name.trim()])).rowCount) throw badRequest('An article with this code or name already exists');
+  const r = (await ctx.db.query(
+    `INSERT INTO product_style(code,name,category,description,hsn_code,gst_rate,sizes,colours,created_by,brand_id,category_id,commodity,cups,packing,pcs_per_pack,rate,mrp,launched_on)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
+    [code, i.name.trim(), a.category ?? (i.category?.trim() || null), i.description?.trim() || null, a.hsn, a.gst, sizes, JSON.stringify(colours), ctx.actor.id,
+     a.brandId, a.categoryId, a.commodity, cups, a.packing, a.pcs, a.rate, a.mrp, a.launchedOn])).rows[0];
+  await audit(ctx, { action: 'style.create', entityType: 'product_style', entityId: r.id, after: { code, name: r.name, brand: a.brandId, category: a.category, sizes, colours, cups, packing: a.packing, rate: a.rate, mrp: a.mrp } });
   return r;
 }
 
-/** Change the name or the lists of sizes and colours. A size or colour can only be dropped when no SKU and no BOM line uses it. */
-export async function updateStyle(ctx: Ctx, i: { styleId: string; expectedVersion: number; name?: string; category?: string; description?: string; sizes?: string[]; colours?: Colour[] }) {
+/**
+ * Change the article: name, brand, category, prices, packing, status, and the lists of sizes, colours and cups.
+ * A size, colour or cup can only be dropped when no SKU and no BOM line uses it. New ones get their SKUs and barcodes made.
+ */
+export async function updateStyle(ctx: Ctx, i: ArticleInput & { styleId: string; expectedVersion: number; name?: string; category?: string; description?: string; hsnCode?: string; gstRate?: string; sizes?: string[]; colours?: (Colour | { code: string; name?: string } | string)[]; status?: 'active' | 'close' | 'disable' }) {
   await assertCan(ctx.db, ctx.actor.id, 'bom.create', ANY);
   const s = (await ctx.db.query('SELECT * FROM product_style WHERE id=$1 FOR UPDATE', [i.styleId])).rows[0];
-  if (!s) throw notFound('Style');
+  if (!s) throw notFound('Article');
   if (s.version !== i.expectedVersion) throw staleVersion(i.expectedVersion, s.version);
   const sizes = i.sizes ? i.sizes.map((x) => x.trim()) : s.sizes as string[];
-  const colours = i.colours ? i.colours.map((c) => ({ code: c.code.trim().toUpperCase(), name: c.name.trim() })) : s.colours as Colour[];
-  checkSizesColours(sizes, colours);
+  const cups = i.cups ? i.cups.map((c) => c.trim().toUpperCase()).filter(Boolean) : s.cups as string[];
+  const raw = i.colours ? i.colours.map((c) => ({ code: (typeof c === 'string' ? c : c.code).trim().toUpperCase(), name: 'x' })) : s.colours as Colour[];
+  checkSizesColours(sizes, raw, cups);
+  const colours = i.colours ? await resolveColours(ctx.db, i.colours, s.colours as Colour[]) : s.colours as Colour[];
+  if (i.status && !Object.keys(ARTICLE_STATUS).includes(i.status)) throw badRequest('Status: active, close or disable');
+  if (i.name?.trim() && i.name.trim().toLowerCase() !== String(s.name).toLowerCase() && (await ctx.db.query('SELECT 1 FROM product_style WHERE lower(name)=lower($1) AND id<>$2', [i.name.trim(), s.id])).rowCount) throw badRequest('Another article already has this name');
   for (const gone of (s.sizes as string[]).filter((x) => !sizes.includes(x))) {
     if ((await ctx.db.query('SELECT 1 FROM sku WHERE style_id=$1 AND size=$2', [s.id, gone])).rowCount) throw invalidState(`Size ${gone} already has SKUs and cannot be removed`);
     if ((await ctx.db.query('SELECT 1 FROM bom_line l JOIN bom b ON b.id=l.bom_id WHERE b.style_id=$1 AND ($2 = ANY(l.sizes) OR l.qty_by_size ? $2)', [s.id, gone])).rowCount) throw invalidState(`Size ${gone} is used in a BOM and cannot be removed`);
@@ -67,59 +126,81 @@ export async function updateStyle(ctx: Ctx, i: { styleId: string; expectedVersio
     if ((await ctx.db.query('SELECT 1 FROM sku WHERE style_id=$1 AND colour_code=$2', [s.id, gone.code])).rowCount) throw invalidState(`Colour ${gone.code} already has SKUs and cannot be removed`);
     if ((await ctx.db.query('SELECT 1 FROM bom_line l JOIN bom b ON b.id=l.bom_id WHERE b.style_id=$1 AND $2 = ANY(l.colours)', [s.id, gone.code])).rowCount) throw invalidState(`Colour ${gone.code} is used in a BOM and cannot be removed`);
   }
-  const r = (await ctx.db.query(`UPDATE product_style SET name=$2, category=$3, description=$4, sizes=$5, colours=$6, version=version+1 WHERE id=$1 RETURNING *`,
-    [s.id, i.name?.trim() || s.name, i.category ?? s.category, i.description ?? s.description, sizes, JSON.stringify(colours)])).rows[0];
-  await audit(ctx, { action: 'style.update', entityType: 'product_style', entityId: s.id, before: { name: s.name, sizes: s.sizes, colours: s.colours }, after: { name: r.name, sizes, colours } });
+  for (const gone of (s.cups as string[]).filter((x) => !cups.includes(x))) {
+    if ((await ctx.db.query('SELECT 1 FROM sku WHERE style_id=$1 AND cup=$2', [s.id, gone])).rowCount) throw invalidState(`Cup ${gone} already has SKUs and cannot be removed`);
+    if ((await ctx.db.query('SELECT 1 FROM bom_line l JOIN bom b ON b.id=l.bom_id WHERE b.style_id=$1 AND $2 = ANY(l.cups)', [s.id, gone])).rowCount) throw invalidState(`Cup ${gone} is used in a BOM and cannot be removed`);
+  }
+  if (cups.length && !(s.cups as string[]).length && (await ctx.db.query('SELECT 1 FROM sku WHERE style_id=$1', [s.id])).rowCount) throw invalidState('This article already has SKUs without a cup. Make a new article for the cup sizes');
+  if (!cups.length && (s.cups as string[]).length && (await ctx.db.query(`SELECT 1 FROM sku WHERE style_id=$1 AND cup<>''`, [s.id])).rowCount) throw invalidState('SKUs with cups exist, so the cups cannot all be removed');
+  const a = await articleFields(ctx.db, i, s);
+  const status = i.status ?? s.status;
+  const r = (await ctx.db.query(
+    `UPDATE product_style SET name=$2, category=$3, description=$4, sizes=$5, colours=$6, brand_id=$7, category_id=$8, commodity=$9, cups=$10, packing=$11, pcs_per_pack=$12,
+            rate=$13, mrp=$14, launched_on=$15, hsn_code=$16, gst_rate=$17, status=$18, version=version+1 WHERE id=$1 RETURNING *`,
+    [s.id, i.name?.trim() || s.name, a.category ?? (i.category === undefined ? s.category : i.category || null), i.description ?? s.description, sizes, JSON.stringify(colours), a.brandId, a.categoryId, a.commodity, cups, a.packing, a.pcs,
+     a.rate, a.mrp, a.launchedOn, a.hsn, a.gst, status])).rows[0];
+  if (a.hsn !== s.hsn_code || a.gst !== s.gst_rate) await ctx.db.query('UPDATE item SET hsn_code=$2, gst_rate=$3 WHERE id IN (SELECT item_id FROM sku WHERE style_id=$1)', [s.id, a.hsn, a.gst]);
+  if (a.pcs > 1 && s.pcs_per_pack <= 1) await fillEans(ctx, s.id); // a pack now exists, so its SKUs get box barcodes
+  await audit(ctx, { action: 'style.update', entityType: 'product_style', entityId: s.id,
+    before: { name: s.name, status: s.status, sizes: s.sizes, colours: s.colours, cups: s.cups, packing: s.packing, rate: s.rate, mrp: s.mrp, brand: s.brand_id, category: s.category_id },
+    after: { name: r.name, status, sizes, colours, cups, packing: a.packing, rate: a.rate, mrp: a.mrp, brand: a.brandId, category: a.categoryId } });
   return r;
 }
 
-/** Make the SKUs: one per chosen size and colour. Existing ones are left alone. */
-export async function createSkus(ctx: Ctx, i: { styleId: string; combos?: { size: string; colour: string }[] }) {
+/** Make the SKUs: one per chosen colour · cup · size. Existing ones are left alone. Each new SKU gets its piece (and box) barcode. */
+export async function createSkus(ctx: Ctx, i: { styleId: string; combos?: { size: string; colour: string; cup?: string }[] }) {
   await assertCan(ctx.db, ctx.actor.id, 'bom.create', ANY);
   const s = (await ctx.db.query('SELECT * FROM product_style WHERE id=$1 FOR UPDATE', [i.styleId])).rows[0];
-  if (!s) throw notFound('Style');
-  const colours = s.colours as Colour[];
-  if (!colours.length) throw badRequest('Add at least one colour to the style first');
-  const combos = i.combos ?? (s.sizes as string[]).flatMap((size) => colours.map((c) => ({ size, colour: c.code })));
+  if (!s) throw notFound('Article');
+  if (s.status === 'disable') throw invalidState(`${s.code} is disabled. Make it active first`);
+  const colours = s.colours as Colour[]; const cups = (s.cups as string[]).length ? s.cups as string[] : [''];
+  if (!colours.length) throw badRequest('Add at least one colour to the article first');
+  const combos = i.combos ?? colours.flatMap((c) => cups.flatMap((cup) => (s.sizes as string[]).map((size) => ({ size, colour: c.code, cup }))));
   if (!combos.length) throw badRequest('Pick at least one size and colour');
   if (combos.length > 400) throw badRequest('Up to 400 SKUs at a time');
   const active = (await ctx.db.query(`SELECT approved_by FROM bom WHERE style_id=$1 AND status='active'`, [s.id])).rows[0];
   const type = (await ctx.db.query(`SELECT id FROM material_type WHERE kind='FG' AND status='active' ORDER BY code LIMIT 1`)).rows[0];
   const made: { id: string; code: string }[] = [];
   for (const c of combos) {
-    if (!(s.sizes as string[]).includes(c.size)) throw badRequest(`Size ${c.size} is not in this style`);
-    const col = colours.find((x) => x.code === c.colour); if (!col) throw badRequest(`Colour ${c.colour} is not in this style`);
-    if ((await ctx.db.query('SELECT 1 FROM sku WHERE style_id=$1 AND size=$2 AND colour_code=$3', [s.id, c.size, c.colour])).rowCount) continue;
-    const code = skuCode(s.code, col.code, c.size);
+    const cup = (c.cup ?? '').toUpperCase();
+    if (!(s.sizes as string[]).includes(c.size)) throw badRequest(`Size ${c.size} is not in this article`);
+    const col = colours.find((x) => x.code === c.colour); if (!col) throw badRequest(`Colour ${c.colour} is not in this article`);
+    if (!cups.includes(cup)) throw badRequest((s.cups as string[]).length ? `Cup ${cup || '(none)'} is not in this article` : 'This article has no cups');
+    if ((await ctx.db.query('SELECT 1 FROM sku WHERE style_id=$1 AND size=$2 AND colour_code=$3 AND cup=$4', [s.id, c.size, c.colour, cup])).rowCount) continue;
+    const code = skuCode(s.code, col.code, c.size, cup);
     if (code.length > 40) throw badRequest(`SKU code ${code} is too long`);
     if ((await ctx.db.query('SELECT 1 FROM item WHERE code=$1', [code])).rowCount) throw badRequest(`The code ${code} is already used by another item`);
     const it = (await ctx.db.query(
       `INSERT INTO item(code,name,kind,stock_unit,tracking,status,attributes,created_by,approved_by,material_type_id,hsn_code,gst_rate,description)
        VALUES ($1,$2,'FG','PC','LOT',$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-      [code, `${s.name} · ${col.name} · ${c.size}`, active ? 'active' : 'draft', JSON.stringify({ style: s.code, size: c.size, colour: col.name, colourCode: col.code }), ctx.actor.id, active?.approved_by ?? null, type?.id ?? null, s.hsn_code, s.gst_rate, s.description])).rows[0];
-    const k = (await ctx.db.query(`INSERT INTO sku(style_id,item_id,code,size,colour_code,created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [s.id, it.id, code, c.size, c.colour, ctx.actor.id])).rows[0];
+      [code, `${s.name} · ${col.name}${cup ? ' · ' + cup : ''} · ${c.size}`, active ? 'active' : 'draft', JSON.stringify({ style: s.code, size: c.size, colour: col.name, colourCode: col.code, ...(cup ? { cup } : {}) }), ctx.actor.id, active?.approved_by ?? null, type?.id ?? null, s.hsn_code, s.gst_rate, s.description])).rows[0];
+    const k = (await ctx.db.query(`INSERT INTO sku(style_id,item_id,code,size,colour_code,cup,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, [s.id, it.id, code, c.size, c.colour, cup, ctx.actor.id])).rows[0];
     made.push({ id: k.id, code });
   }
-  await audit(ctx, { action: 'style.skus', entityType: 'product_style', entityId: s.id, after: { created: made.map((m) => m.code) } });
-  return { created: made.length, skipped: combos.length - made.length, codes: made.map((m) => m.code) };
+  const eans = made.length ? await fillEans(ctx, s.id) : { made: 0 };
+  await audit(ctx, { action: 'style.skus', entityType: 'product_style', entityId: s.id, after: { created: made.map((m) => m.code), barcodes: eans.made } });
+  return { created: made.length, skipped: combos.length - made.length, codes: made.map((m) => m.code), barcodes: eans.made };
 }
 
 // ───────────────────────── reading ─────────────────────────
 export async function listStyles(db: Db, userId: string) {
   await assertCan(db, userId, 'bom.view', ANY);
   return (await db.query(
-    `SELECT s.id, s.code, s.name, s.category, s.status, cardinality(s.sizes) AS n_sizes, jsonb_array_length(s.colours) AS n_colours,
+    `SELECT s.id, s.code, s.name, s.category, s.status, s.version, s.sizes, s.colours, s.cups, s.packing, s.pcs_per_pack, s.rate::text, s.mrp::text, s.hsn_code, s.commodity, s.launched_on::text,
+            s.brand_id, s.category_id, b.name AS brand, c.name AS category_name, cardinality(s.sizes) AS n_sizes, jsonb_array_length(s.colours) AS n_colours, cardinality(s.cups) AS n_cups,
+            (SELECT count(*) FROM sku_ean e JOIN sku k ON k.id=e.sku_id WHERE k.style_id=s.id AND e.kind='piece')::int AS n_piece_bc,
+            (SELECT count(*) FROM sku_ean e JOIN sku k ON k.id=e.sku_id WHERE k.style_id=s.id AND e.kind='box')::int AS n_box_bc,
             (SELECT count(*) FROM sku k WHERE k.style_id=s.id)::int AS n_skus,
             (SELECT b.version FROM bom b WHERE b.style_id=s.id AND b.status='active') AS active_version,
             (SELECT b.status FROM bom b WHERE b.style_id=s.id AND b.status IN ('draft','submitted')) AS open_status
-       FROM product_style s ORDER BY s.code`)).rows;
+       FROM product_style s LEFT JOIN brand b ON b.id=s.brand_id LEFT JOIN product_category c ON c.id=s.category_id ORDER BY s.code`)).rows;
 }
 
 export async function getStyle(db: Db, userId: string, id: string) {
   await assertCan(db, userId, 'bom.view', ANY);
   const style = (await db.query('SELECT s.*, u.display_name AS creator FROM product_style s LEFT JOIN app_user u ON u.id=s.created_by WHERE s.id=$1', [id])).rows[0];
   if (!style) throw notFound('Style');
-  const skus = (await db.query(`SELECT k.id, k.code, k.size, k.colour_code, i.id AS item_id, i.status FROM sku k JOIN item i ON i.id=k.item_id WHERE k.style_id=$1 ORDER BY k.colour_code, k.code`, [id])).rows;
+  const skus = (await db.query(`SELECT k.id, k.code, k.size, k.colour_code, k.cup, i.id AS item_id, i.status, (SELECT code FROM sku_ean e WHERE e.sku_id=k.id AND e.kind='piece') AS ean_piece, (SELECT code FROM sku_ean e WHERE e.sku_id=k.id AND e.kind='box') AS ean_box FROM sku k JOIN item i ON i.id=k.item_id WHERE k.style_id=$1 ORDER BY k.colour_code, k.cup, array_position($2::text[], k.size)`, [id, style.sizes])).rows;
   const boms = (await db.query(
     `SELECT b.id, b.version, b.status, b.created_at, b.approved_at, b.effective_from, b.return_reason, cu.display_name AS creator, au.display_name AS approver,
             (SELECT count(*) FROM bom_line l WHERE l.bom_id=b.id)::int AS n_lines
@@ -138,8 +219,9 @@ export async function getBom(db: Db, userId: string, id: string) {
   return { bom, lines, history };
 }
 
-type BomLineRow = { id: string; line_no: number; section: string; item_id: string; qty: string; unit: string; wastage_pct: string; sizes: string[] | null; colours: string[] | null; qty_by_size: Record<string, string>; note: string | null };
-export const applies = (l: Pick<BomLineRow, 'sizes' | 'colours'>, size: string, colour: string) => (!l.sizes?.length || l.sizes.includes(size)) && (!l.colours?.length || l.colours.includes(colour));
+type BomLineRow = { id: string; line_no: number; section: string; item_id: string; qty: string; unit: string; wastage_pct: string; sizes: string[] | null; colours: string[] | null; cups?: string[] | null; qty_by_size: Record<string, string>; note: string | null };
+/** Does a BOM line apply to this size, colour and cup? A line with no list applies to all of them. */
+export const applies = (l: Pick<BomLineRow, 'sizes' | 'colours' | 'cups'>, size: string, colour: string, cup = '') => (!l.sizes?.length || l.sizes.includes(size)) && (!l.colours?.length || l.colours.includes(colour)) && (!l.cups?.length || l.cups.includes(cup));
 export const lineQty = (l: Pick<BomLineRow, 'qty' | 'qty_by_size' | 'wastage_pct'>, size: string) => {
   const base = l.qty_by_size && l.qty_by_size[size] != null ? num(l.qty_by_size[size]) : num(l.qty);
   return { net: r4(base), gross: r4(base * (1 + num(l.wastage_pct) / 100)) };
@@ -159,7 +241,7 @@ export async function skuBom(db: Db, userId: string, i: { bomId: string; skuId: 
   const k = (await db.query('SELECT * FROM sku WHERE id=$1 AND style_id=$2', [i.skuId, b.style_id])).rows[0]; if (!k) throw notFound('SKU');
   const lines = (await db.query(`SELECT l.*, i.code AS item_code, i.name AS item_name FROM bom_line l JOIN item i ON i.id=l.item_id WHERE l.bom_id=$1 ORDER BY l.line_no`, [i.bomId])).rows as (BomLineRow & { item_code: string; item_name: string })[];
   const rates = await bestRates(db, lines.map((l) => l.item_id));
-  const out = lines.filter((l) => applies(l, k.size, k.colour_code)).map((l) => {
+  const out = lines.filter((l) => applies(l, k.size, k.colour_code, k.cup)).map((l) => {
     const q = lineQty(l, k.size); const rate = rates.get(l.item_id) ?? null;
     return { line_no: l.line_no, section: l.section, item_id: l.item_id, item_code: l.item_code, item_name: l.item_name, unit: l.unit, net: q.net, wastage_pct: num(l.wastage_pct), gross: q.gross, rate, cost: rate == null ? null : r2(q.gross * rate), size_specific: l.qty_by_size?.[k.size] != null, note: l.note };
   });
@@ -174,7 +256,7 @@ export async function bomOverview(db: Db, userId: string, bomId: string) {
   const lines = (await db.query('SELECT * FROM bom_line WHERE bom_id=$1', [bomId])).rows as BomLineRow[];
   const rates = await bestRates(db, lines.map((l) => l.item_id));
   return skus.map((k) => {
-    const mine = lines.filter((l) => applies(l, k.size, k.colour_code));
+    const mine = lines.filter((l) => applies(l, k.size, k.colour_code, k.cup));
     const cost = mine.reduce((a, l) => a + (rates.has(l.item_id) ? lineQty(l, k.size).gross * rates.get(l.item_id)! : 0), 0);
     return { id: k.id, code: k.code, size: k.size, colour: k.colour_code, lines: mine.length, cost: r2(cost), unpriced: mine.filter((l) => !rates.has(l.item_id)).length };
   });
@@ -194,7 +276,7 @@ export async function requirements(db: Db, userId: string, i: { bomId: string; p
   for (const p of plan) {
     const k = skus.find((x) => x.id === p.skuId); if (!k) throw notFound('SKU');
     pieces += p.qty;
-    for (const l of lines.filter((x) => applies(x, k.size, k.colour_code))) {
+    for (const l of lines.filter((x) => applies(x, k.size, k.colour_code, k.cup))) {
       const e = need.get(l.item_id) ?? { item_id: l.item_id, code: l.item_code, name: l.item_name, unit: l.unit, section: l.section, required: 0, skus: new Set<string>() };
       e.required += lineQty(l, k.size).gross * p.qty; e.skus.add(k.code); need.set(l.item_id, e);
     }
@@ -234,7 +316,7 @@ export async function startBom(ctx: Ctx, i: { styleId: string; copyFromBomId?: s
   if (i.copyFromBomId && !from) throw notFound('BOM to copy');
   const version = ((await ctx.db.query('SELECT max(version) AS v FROM bom WHERE style_id=$1', [s.id])).rows[0].v ?? 0) + 1;
   const b = (await ctx.db.query(`INSERT INTO bom(style_id, version, created_by, notes) VALUES ($1,$2,$3,$4) RETURNING *`, [s.id, version, ctx.actor.id, from ? `Copy of version ${from.version}` : null])).rows[0];
-  if (from) await ctx.db.query(`INSERT INTO bom_line(bom_id,line_no,section,item_id,qty,unit,wastage_pct,sizes,colours,qty_by_size,note) SELECT $1,line_no,section,item_id,qty,unit,wastage_pct,sizes,colours,qty_by_size,note FROM bom_line WHERE bom_id=$2`, [b.id, from.id]);
+  if (from) await ctx.db.query(`INSERT INTO bom_line(bom_id,line_no,section,item_id,qty,unit,wastage_pct,sizes,colours,cups,qty_by_size,note) SELECT $1,line_no,section,item_id,qty,unit,wastage_pct,sizes,colours,cups,qty_by_size,note FROM bom_line WHERE bom_id=$2`, [b.id, from.id]);
   await audit(ctx, { action: 'bom.start', entityType: 'bom', entityId: b.id, after: { style: s.code, version, copiedFrom: from?.version ?? null } });
   return b;
 }
@@ -246,10 +328,10 @@ export async function saveBomLines(ctx: Ctx, i: { bomId: string; expectedRev: nu
   if (b.status !== 'draft') throw invalidState(`This version is ${b.status}. Start a new version to change the materials`);
   if (b.created_by !== ctx.actor.id) throw forbidden('Only the person who started this version can change it');
   const s = (await ctx.db.query('SELECT * FROM product_style WHERE id=$1', [b.style_id])).rows[0];
-  const sizes = s.sizes as string[]; const colourCodes = (s.colours as Colour[]).map((c) => c.code);
+  const sizes = s.sizes as string[]; const colourCodes = (s.colours as Colour[]).map((c) => c.code); const cupList = s.cups as string[];
   if (i.lines.length > 100) throw badRequest('A BOM can hold up to 100 lines');
   const own = new Set((await ctx.db.query('SELECT item_id FROM sku WHERE style_id=$1', [s.id])).rows.map((r) => r.item_id as string));
-  const rows: { l: LineInput; unit: string; sizes: string[] | null; colours: string[] | null; qbs: Record<string, string> }[] = [];
+  const rows: { l: LineInput; unit: string; sizes: string[] | null; colours: string[] | null; cups: string[] | null; qbs: Record<string, string> }[] = [];
   for (const [n, l] of i.lines.entries()) {
     const at = `Line ${n + 1}`;
     if (!SECTIONS.includes(l.section)) throw badRequest(`${at}: pick a section`);
@@ -262,6 +344,8 @@ export async function saveBomLines(ctx: Ctx, i: { bomId: string; expectedRev: nu
     const sz = l.sizes?.length ? l.sizes : null, co = l.colours?.length ? l.colours : null;
     if (sz && sz.some((x) => !sizes.includes(x))) throw badRequest(`${at}: a size is not in this style`);
     if (co && co.some((x) => !colourCodes.includes(x))) throw badRequest(`${at}: a colour is not in this style`);
+    const cu = l.cups?.length ? l.cups : null;
+    if (cu && cu.some((x) => !cupList.includes(x))) throw badRequest(`${at}: a cup is not in this article`);
     const qbs: Record<string, string> = {};
     for (const [k, v] of Object.entries(l.qtyBySize ?? {})) {
       if (v === '' || v == null) continue;
@@ -269,17 +353,17 @@ export async function saveBomLines(ctx: Ctx, i: { bomId: string; expectedRev: nu
       if (!NUM.test(String(v)) || num(v) <= 0) throw badRequest(`${at}: quantity for size ${k} must be a positive number`);
       qbs[k] = String(v);
     }
-    rows.push({ l, unit: it.stock_unit, sizes: sz, colours: co, qbs });
+    rows.push({ l, unit: it.stock_unit, sizes: sz, colours: co, cups: cu, qbs });
   }
   // the same material may not be counted twice for one size and colour
-  for (const size of sizes) for (const col of colourCodes.length ? colourCodes : ['']) {
+  for (const size of sizes) for (const col of colourCodes.length ? colourCodes : ['']) for (const cup of cupList.length ? cupList : ['']) {
     const seen = new Map<string, number>();
-    rows.forEach((r, n) => { if (!applies({ sizes: r.sizes, colours: r.colours }, size, col)) return; if (seen.has(r.l.itemId)) throw badRequest(`Lines ${seen.get(r.l.itemId)! + 1} and ${n + 1} use the same material for size ${size}${col ? ' in ' + col : ''}. Split them by size or colour, or merge them`); seen.set(r.l.itemId, n); });
+    rows.forEach((r, n) => { if (!applies({ sizes: r.sizes, colours: r.colours, cups: r.cups }, size, col, cup)) return; if (seen.has(r.l.itemId)) throw badRequest(`Lines ${seen.get(r.l.itemId)! + 1} and ${n + 1} use the same material for size ${size}${col ? ' in ' + col : ''}${cup ? ', cup ' + cup : ''}. Split them by size, colour or cup, or merge them`); seen.set(r.l.itemId, n); });
   }
   await ctx.db.query('DELETE FROM bom_line WHERE bom_id=$1', [b.id]);
   for (const [n, r] of rows.entries())
-    await ctx.db.query(`INSERT INTO bom_line(bom_id,line_no,section,item_id,qty,unit,wastage_pct,sizes,colours,qty_by_size,note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [b.id, n + 1, r.l.section, r.l.itemId, String(r.l.qty).trim(), r.unit, r.l.wastagePct || '0', r.sizes, r.colours, JSON.stringify(r.qbs), r.l.note?.trim().slice(0, 200) || null]);
+    await ctx.db.query(`INSERT INTO bom_line(bom_id,line_no,section,item_id,qty,unit,wastage_pct,sizes,colours,cups,qty_by_size,note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [b.id, n + 1, r.l.section, r.l.itemId, String(r.l.qty).trim(), r.unit, r.l.wastagePct || '0', r.sizes, r.colours, r.cups, JSON.stringify(r.qbs), r.l.note?.trim().slice(0, 200) || null]);
   const u = (await ctx.db.query('UPDATE bom SET rev=rev+1, notes=COALESCE($2, notes), return_reason=NULL WHERE id=$1 RETURNING *', [b.id, i.notes ?? null])).rows[0];
   await audit(ctx, { action: 'bom.save', entityType: 'bom', entityId: b.id, after: { lines: rows.length } });
   return u;
@@ -293,9 +377,9 @@ export async function checkBom(db: Db, bomId: string) {
   const problems: string[] = [];
   if (!skus.length) problems.push('The style has no SKUs yet. Create the sizes and colours first');
   if (!lines.length) problems.push('The BOM has no materials');
-  const bare = skus.filter((k) => !lines.some((l) => applies(l, k.size, k.colour_code)));
+  const bare = skus.filter((k) => !lines.some((l) => applies(l, k.size, k.colour_code, k.cup)));
   if (lines.length && bare.length) problems.push(`${bare.length} SKU${bare.length === 1 ? '' : 's'} would get no materials: ${bare.slice(0, 4).map((k) => k.code).join(', ')}${bare.length > 4 ? '…' : ''}`);
-  const noFabric = skus.filter((k) => lines.length && !lines.some((l) => l.section === 'FABRIC' && applies(l, k.size, k.colour_code)));
+  const noFabric = skus.filter((k) => lines.length && !lines.some((l) => l.section === 'FABRIC' && applies(l, k.size, k.colour_code, k.cup)));
   const warnings = noFabric.length ? [`${noFabric.length} SKU${noFabric.length === 1 ? ' has' : 's have'} no fabric line (${noFabric.slice(0, 3).map((k) => k.code).join(', ')}${noFabric.length > 3 ? '…' : ''}). Fine for accessories, check it is intended`] : [];
   return { problems, warnings };
 }

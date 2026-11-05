@@ -29,7 +29,7 @@ afterAll(async () => { await w.pool.end(); });
 describe('styles and SKUs', () => {
   it('makes one stock item per size and colour, in draft until the BOM is approved', async () => {
     await rejects(w.as('sto', (c) => bom.createStyle(c, { code: 'BRF-01', name: 'Brief', sizes: ['S'], colours: [] })), 'Not permitted');
-    await rejects(w.as('md', (c) => bom.createStyle(c, { code: 'b', name: 'Brief', sizes: ['S'], colours: [] })), 'Style code');
+    await rejects(w.as('md', (c) => bom.createStyle(c, { code: 'b', name: 'Brief', sizes: ['S'], colours: [] })), 'Article code');
     await rejects(w.as('md', (c) => bom.createStyle(c, { code: 'BRF-01', name: 'Brief', sizes: ['S', 's'], colours: [] })), 'twice');
     await rejects(w.as('md', (c) => bom.createStyle(c, { code: 'BRF-01', name: 'Brief', sizes: ['S'], colours: [{ code: 'B-K', name: 'Black' }] })), 'Colour code');
     style = await w.as('md', (c) => bom.createStyle(c, { code: 'BRF-01', name: 'Classic brief', category: 'Innerwear', sizes: ['S', 'M', 'L', 'XL'], colours: [{ code: 'BLK', name: 'Black' }, { code: 'WHT', name: 'White' }] }));

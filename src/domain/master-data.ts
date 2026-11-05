@@ -208,7 +208,7 @@ async function insertAddress(ctx: Ctx, partnerId: string, kind: string, a: Addre
   return r.rows[0];
 }
 
-export type PartnerProfile = { name?: string; gstin?: string; pan?: string; state?: string; city?: string; phone?: string; email?: string; paymentDays?: number | null; notes?: string; bankAccount?: string; customerType?: 'distributor' | 'retailer' };
+export type PartnerProfile = { name?: string; gstin?: string; pan?: string; state?: string; city?: string; phone?: string; email?: string; paymentDays?: number | null; notes?: string; bankAccount?: string };
 
 function checkProfile(p: PartnerProfile) {
   if (p.gstin && !GSTIN_RE.test(p.gstin.toUpperCase())) throw badRequest('GSTIN looks wrong — it has 15 characters, like 29ABCDE1234F1Z5');
@@ -217,11 +217,10 @@ function checkProfile(p: PartnerProfile) {
   if (p.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(p.email)) throw badRequest('Email address looks wrong');
   if (p.phone && !/^[+\d][\d\s-]{6,16}$/.test(p.phone)) throw badRequest('Phone number looks wrong');
   checkState(p.state);
-  if (p.customerType && !['distributor', 'retailer'].includes(p.customerType)) throw badRequest('Customer type: distributor or retailer');
   if (p.paymentDays != null && !(Number.isInteger(p.paymentDays) && p.paymentDays >= 0 && p.paymentDays <= 365)) throw badRequest('Payment days: 0 to 365');
 }
 
-export async function createParty(ctx: Ctx, i: PartnerProfile & { name: string; role: 'vendor' | 'customer' | 'both' | 'subcontractor'; code?: string; contact?: { name: string; phone?: string; email?: string; role?: string }; billing?: AddressInput; shipping?: AddressInput; shippingSameAsBilling?: boolean }) {
+export async function createParty(ctx: Ctx, i: PartnerProfile & { name: string; role: 'vendor' | 'subcontractor'; code?: string; contact?: { name: string; phone?: string; email?: string; role?: string }; billing?: AddressInput; shipping?: AddressInput; shippingSameAsBilling?: boolean }) {
   await assertCan(ctx.db, ctx.actor.id, 'partner.create', ANY);
   if (!i.name?.trim()) throw badRequest('Name is required');
   checkProfile(i);
@@ -230,12 +229,14 @@ export async function createParty(ctx: Ctx, i: PartnerProfile & { name: string; 
   if (ship) checkAddress(ship, true);
   const dup = await ctx.db.query(`SELECT code FROM partner WHERE lower(name)=lower($1) OR ($2::text IS NOT NULL AND gstin=$2) OR ($3::text IS NOT NULL AND pan=$3 AND lower(name)=lower($1))`, [i.name.trim(), i.gstin?.toUpperCase() ?? null, i.pan?.toUpperCase() ?? null]);
   if (dup.rowCount) throw badRequest(`Possible duplicate — already on file as ${dup.rows[0].code}`);
-  const vendor = i.role === 'vendor' || i.role === 'both', cust = i.role === 'customer' || i.role === 'both';
-  const code = i.code?.trim().toUpperCase() || (await nextCode(ctx.db, 'partner', cust && !vendor ? 'C' : 'V'));
+  // Customers (distributors and retailers) live in the CRM app; the ERP keeps vendors and job-work subcontractors.
+  if (!['vendor', 'subcontractor'].includes(i.role)) throw badRequest('Role: vendor or subcontractor. Customers are kept in the CRM app');
+  const vendor = i.role === 'vendor';
+  const code = i.code?.trim().toUpperCase() || (await nextCode(ctx.db, 'partner', 'V'));
   const r = await ctx.db.query(
-    `INSERT INTO partner(code,name,is_vendor,is_customer,is_subcontractor,gstin,pan,state,city,phone,email,payment_days,notes,bank_account,created_by,customer_type)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
-    [code, i.name.trim(), vendor, cust, i.role === 'subcontractor', i.gstin?.toUpperCase() || null, i.pan?.toUpperCase() || null, i.state || null, i.city || null, i.phone || null, i.email || null, i.paymentDays ?? null, i.notes || null, i.bankAccount || null, ctx.actor.id, cust ? (i.customerType ?? 'retailer') : null]);
+    `INSERT INTO partner(code,name,is_vendor,is_customer,is_subcontractor,gstin,pan,state,city,phone,email,payment_days,notes,bank_account,created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+    [code, i.name.trim(), vendor, false, i.role === 'subcontractor', i.gstin?.toUpperCase() || null, i.pan?.toUpperCase() || null, i.state || null, i.city || null, i.phone || null, i.email || null, i.paymentDays ?? null, i.notes || null, i.bankAccount || null, ctx.actor.id]);
   const p = r.rows[0];
   if (i.contact?.name.trim()) await ctx.db.query(`INSERT INTO partner_contact(partner_id,name,role,phone,email,is_primary) VALUES ($1,$2,$3,$4,$5,true)`, [p.id, i.contact.name.trim(), i.contact.role || null, i.contact.phone || null, i.contact.email || null]);
   if (i.billing) await insertAddress(ctx, p.id, 'billing', i.billing);
@@ -260,9 +261,9 @@ export async function updateParty(ctx: Ctx, i: PartnerProfile & { partnerId: str
   const reverify = sensitive && ['active', 'suspended'].includes(p.status);
   const r = await ctx.db.query(
     `UPDATE partner SET name=$2, gstin=$3, pan=$4, state=$5, city=$6, phone=$7, email=$8, payment_days=$9, notes=$10, bank_account=$11,
-            bank_verified_by = CASE WHEN $12 THEN NULL ELSE bank_verified_by END, status = CASE WHEN $12 THEN 'verification' ELSE status END, customer_type=$13, version=version+1
+            bank_verified_by = CASE WHEN $12 THEN NULL ELSE bank_verified_by END, status = CASE WHEN $12 THEN 'verification' ELSE status END, version=version+1
       WHERE id=$1 RETURNING *`,
-    [i.partnerId, i.name?.trim() || p.name, gstin, pan, i.state ?? p.state, i.city ?? p.city, i.phone ?? p.phone, i.email ?? p.email, i.paymentDays === undefined ? p.payment_days : i.paymentDays, i.notes ?? p.notes, bank, reverify, p.is_customer ? (i.customerType ?? p.customer_type ?? 'retailer') : null]);
+    [i.partnerId, i.name?.trim() || p.name, gstin, pan, i.state ?? p.state, i.city ?? p.city, i.phone ?? p.phone, i.email ?? p.email, i.paymentDays === undefined ? p.payment_days : i.paymentDays, i.notes ?? p.notes, bank, reverify]);
   const mask = (x: Record<string, unknown>) => ({ ...x, bank_account: x.bank_account ? '••••' + String(x.bank_account).slice(-4) : null });
   await audit(ctx, { action: 'partner.update', entityType: 'partner', entityId: p.id, before: mask(p), after: mask(r.rows[0]), reason: reverify ? 'Bank/GSTIN changed — sent back for verification' : null });
   return { ...r.rows[0], sentBack: reverify };
@@ -343,21 +344,18 @@ export async function reactivateParty(ctx: Ctx, i: { partnerId: string; expected
   return r.rows[0];
 }
 
-export async function listParties(db: Db, userId: string, f: { role: 'vendor' | 'customer'; customerType?: 'distributor' | 'retailer'; q?: string; status?: string }) {
-  if (!(await can(db, userId, 'partner.view', ANY)) && !(f.role === 'customer' && await can(db, userId, 'so.view', ANY))) return null;
+export async function listParties(db: Db, userId: string, f: { role: 'vendor'; q?: string; status?: string }) {
+  if (!(await can(db, userId, 'partner.view', ANY))) return null;
   const q = f.q?.trim() ? `%${f.q.trim().toLowerCase()}%` : null;
   return (await db.query(
-    `SELECT p.id, p.code, p.name, p.status, p.version, p.gstin, p.city, p.state, p.phone, p.email, p.payment_days, p.is_vendor, p.is_customer, COALESCE(p.customer_type, CASE WHEN p.is_customer THEN 'retailer' END) AS customer_type,
+    `SELECT p.id, p.code, p.name, p.status, p.version, p.gstin, p.city, p.state, p.phone, p.email, p.payment_days, p.is_vendor,
             (SELECT name FROM partner_contact c WHERE c.partner_id=p.id ORDER BY is_primary DESC, created_at LIMIT 1) AS contact,
             (SELECT count(*) FROM purchase_order o WHERE o.partner_id=p.id)::int AS pos,
-            COALESCE((SELECT sum(total) FROM purchase_order o WHERE o.partner_id=p.id AND o.status NOT IN ('draft','cancelled')),0)::text AS po_value,
-            (SELECT count(*) FROM sales_order s WHERE s.customer_id=p.id)::int AS orders,
-            COALESCE((SELECT sum(total) FROM sales_order s WHERE s.customer_id=p.id AND s.status NOT IN ('draft','cancelled')),0)::text AS order_value
+            COALESCE((SELECT sum(total) FROM purchase_order o WHERE o.partner_id=p.id AND o.status NOT IN ('draft','cancelled')),0)::text AS po_value
        FROM partner p
-      WHERE ${f.role === 'vendor' ? 'p.is_vendor' : 'p.is_customer'}
+      WHERE p.is_vendor
         AND ($1::text IS NULL OR lower(p.name) LIKE $1 OR lower(p.code) LIKE $1 OR lower(COALESCE(p.gstin,'')) LIKE $1 OR lower(COALESCE(p.city,'')) LIKE $1)
-        AND ($2::text IS NULL OR p.status=$2)
-        AND ($3::text IS NULL OR COALESCE(p.customer_type,'retailer')=$3) ORDER BY p.name`, [q, f.status || null, f.customerType ?? null])).rows;
+        AND ($2::text IS NULL OR p.status=$2) ORDER BY p.name`, [q, f.status || null])).rows;
 }
 
 export async function getParty(db: Db, userId: string, id: string) {
@@ -369,11 +367,9 @@ export async function getParty(db: Db, userId: string, id: string) {
     `SELECT r.id, r.rate::text, r.unit, r.min_qty::text, r.effective_from, r.effective_to, r.status, r.proposed_by, i.code AS item_code, i.name AS item_name
        FROM rate r JOIN item i ON i.id=r.item_id WHERE r.partner_id=$1 ORDER BY i.code, r.effective_from DESC`, [id])).rows;
   const pos = (await db.query(`SELECT id, number, status, total::text, created_at FROM purchase_order WHERE partner_id=$1 ORDER BY created_at DESC LIMIT 8`, [id])).rows;
-  const orders = (await db.query(`SELECT id, number, status, total::text, created_at FROM sales_order WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 8`, [id])).rows;
-  const terms = (await db.query('SELECT credit_limit::text, payment_days FROM customer_terms WHERE partner_id=$1', [id])).rows[0] ?? null;
   const history = (await db.query(`SELECT a.at, a.action, a.reason, u.display_name AS who FROM audit_log a LEFT JOIN app_user u ON u.id=a.actor_id WHERE a.entity_type='partner' AND a.entity_id=$1 ORDER BY a.id DESC LIMIT 12`, [id])).rows;
   const creator = (await db.query('SELECT display_name FROM app_user WHERE id=$1', [p.created_by])).rows[0]?.display_name ?? '';
-  return { p, contacts, addresses, rates, pos, orders, terms, history, creator };
+  return { p, contacts, addresses, rates, pos, history, creator };
 }
 
 // ───────────────────────── Bulk add (CSV paste) ─────────────────────────
@@ -395,7 +391,7 @@ export function parseCsv(text: string): { head: string[]; rows: string[][] } {
 }
 export const MATERIAL_CSV = 'type,name,description,hsn,gst,reorder_level,unit';
 /** Bulk files may also carry a leading "code" column: a row with a code that already exists changes that item instead of adding one. */
-export const PARTY_CSV = 'role,name,gstin,pan,city,state,phone,email,payment_days,contact_name,contact_phone';
+export const PARTY_CSV = 'name,gstin,pan,city,state,phone,email,payment_days,contact_name,contact_phone';
 
 export type ImportResult = { created: number; updated?: number; errors: { row: number; message: string }[]; dryRun: boolean };
 
@@ -437,32 +433,28 @@ export async function importMaterials(ctx: Ctx, csv: string, dryRun = false, sco
   return { created: errors.length ? 0 : created, updated: errors.length ? 0 : updated, errors, dryRun };
 }
 
-export async function importParties(ctx: Ctx, csv: string, dryRun = false, scope?: 'vendor' | 'distributor' | 'retailer'): Promise<ImportResult> {
+export async function importParties(ctx: Ctx, csv: string, dryRun = false, scope: 'vendor' = 'vendor'): Promise<ImportResult> {
   await assertCan(ctx.db, ctx.actor.id, 'partner.create', ANY);
   const { head, rows } = parseCsv(csv);
   if (!head.includes('name')) throw badRequest(`Header must include "name". Expected: ${PARTY_CSV}`);
-  if (!scope && !head.includes('role')) throw badRequest(`Header must include "role". Expected: ${PARTY_CSV}`);
   const errors: ImportResult['errors'] = []; let created = 0, updated = 0; const seen = new Set<string>();
   await ctx.db.query('SAVEPOINT imp_all');
   for (let n = 0; n < rows.length; n++) {
     const g = (k: string) => rows[n][head.indexOf(k)] ?? '';
     try {
       const role = (g('role') || scope || '').toLowerCase();
-      if (!['vendor', 'customer', 'client', 'distributor', 'retailer', 'both'].includes(role)) throw badRequest(`Role must be vendor, distributor or retailer (got "${g('role')}")`);
-      if (scope && (scope === 'vendor' ? role !== 'vendor' : role === 'vendor' || role === 'both')) throw badRequest(`This list takes ${scope}s only (got "${role}")`);
-      const customerType = role === 'distributor' ? 'distributor' : role === 'retailer' || role === 'customer' || role === 'client' ? 'retailer' : undefined;
-      const dbRole = role === 'vendor' ? 'vendor' : role === 'both' ? 'both' : 'customer';
+      if (role !== 'vendor') throw badRequest(`This list takes vendors only (got "${role}"). Customers are kept in the CRM app`);
       const profile = { gstin: g('gstin'), pan: g('pan'), city: g('city'), state: g('state'), phone: g('phone'), email: g('email'), paymentDays: g('payment_days') ? Number(g('payment_days')) : undefined };
       await ctx.db.query('SAVEPOINT imp');
       const code = g('code').toUpperCase();
       const have = code ? (await ctx.db.query('SELECT id, version, is_vendor, is_customer FROM partner WHERE code=$1', [code])).rows[0] : null;
       if (have) {
         if (seen.has(code)) throw badRequest('Listed twice in this file'); seen.add(code);
-        if (scope === 'vendor' ? !have.is_vendor : scope && !have.is_customer) throw badRequest(`${code} is not in this list`);
-        await updateParty(ctx, { partnerId: have.id, expectedVersion: have.version, name: g('name') || undefined, ...profile, customerType: have.is_customer ? customerType : undefined });
+        if (!have.is_vendor) throw badRequest(`${code} is not in this list`);
+        await updateParty(ctx, { partnerId: have.id, expectedVersion: have.version, name: g('name') || undefined, ...profile });
         updated++;
       } else {
-        await createParty(ctx, { name: g('name'), role: dbRole, code: code || undefined, ...profile, customerType, contact: g('contact_name') ? { name: g('contact_name'), phone: g('contact_phone') } : undefined });
+        await createParty(ctx, { name: g('name'), role: 'vendor', code: code || undefined, ...profile, contact: g('contact_name') ? { name: g('contact_name'), phone: g('contact_phone') } : undefined });
         created++;
       }
       await ctx.db.query(dryRun ? 'ROLLBACK TO SAVEPOINT imp' : 'RELEASE SAVEPOINT imp');

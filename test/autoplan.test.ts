@@ -4,12 +4,11 @@ import type { World } from '../src/seed/demo.js';
 import * as plan from '../src/domain/planning.js';
 import * as prod from '../src/domain/production.js';
 import { runDailyPlan } from '../src/jobs/daily-plan.js';
-import { seedSalesBase } from '../src/seed/sales-demo.js';
 import { seedMastersDemo } from '../src/seed/masters-demo.js';
 
 let w: World;
 beforeAll(async () => {
-  w = await freshWorld('autoplan'); await seedSalesBase(w); await seedMastersDemo(w, true);
+  w = await freshWorld('autoplan'); await seedMastersDemo(w);
   await w.addUser('pln', 'PLN', { displayName: 'Planner' });
   const blk = (await w.pool.query(`SELECT item_id FROM sku WHERE code='BRF-01-BLK-M'`)).rows[0].item_id;
   await w.as('pln', (c) => plan.setItemPlan(c, { itemId: blk, monthlyDemand: '300' }));

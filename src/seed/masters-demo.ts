@@ -2,6 +2,7 @@ import type { World } from './demo.js';
 import * as masters from '../domain/masters.js';
 import * as md from '../domain/master-data.js';
 import * as bom from '../domain/bom.js';
+import { seedArticles } from './catalog-demo.js';
 
 const A = md.parseAttrs;
 export const TYPES: { code: string; name: string; kind: string; unit: string; tracking: string; prefix: string; attrs: string }[] = [
@@ -16,8 +17,8 @@ export const TYPES: { code: string; name: string; kind: string; unit: string; tr
   { code: 'GARMENT', name: 'Finished garments', kind: 'FG', unit: 'PC', tracking: 'LOT', prefix: 'FG', attrs: 'Size|text|required\nColour|text' },
 ];
 
-/** Material types, a fuller materials list, vendors and clients with contacts, addresses and rate cards. */
-export async function seedMastersDemo(w: World, withSales: boolean) {
+/** Material types, a fuller materials list, vendors with contacts, addresses and rate cards. */
+export async function seedMastersDemo(w: World) {
   const t: Record<string, string> = {};
   for (const x of TYPES) t[x.code] = (await w.as('md', (c) => md.createMaterialType(c, { code: x.code, name: x.name, kind: x.kind, defaultUnit: x.unit, tracking: x.tracking, prefix: x.prefix, attrs: A(x.attrs) }))).id;
 
@@ -44,7 +45,6 @@ export async function seedMastersDemo(w: World, withSales: boolean) {
   const cup = await mat('CUP', 'Moulded cup B', { hsnCode: '6212', gstRate: '12', reorderLevel: '2000', attributes: { cupSize: 'B', moulding: 'Seamless' } });
   const lbl = await mat('LABEL', 'Woven brand label', { hsnCode: '5807', gstRate: '12', reorderLevel: '10000' });
   const ctn = await mat('CARTON', 'Export carton 60x40x40', { hsnCode: '4819', gstRate: '12', reorderLevel: '200', attributes: { size: '60x40x40 cm' } });
-  await mat('GARMENT', 'Basic tee, white, M', { hsnCode: '6109', gstRate: '5', attributes: { size: 'M', colour: 'White' } });
   await mat('KNIT', 'Single jersey 150 GSM, navy', { hsnCode: '6006', gstRate: '5', attributes: { width: 160, gsm: 150 } }, false); // still a draft
 
   const wbox = await mat('CARTON', 'Retail box 3-pack', { hsnCode: '4819', gstRate: '12', reorderLevel: '300', attributes: { size: '22x16x6 cm' } });
@@ -77,23 +77,10 @@ export async function seedMastersDemo(w: World, withSales: boolean) {
   await rate(v3, cup, '9.5000');
   await rate(v1, rib, '165.0000'); await rate(v2, picot, '3.1000'); await rate(v1, thr, '950.0000'); await rate(v2, lbl, '0.6000');
 
-  // Clients. C-001 and C-002 exist when the sales demo ran.
-  if (withSales) {
-    for (const [code, contact, phone, city, state, line, pin] of [
-      ['C-001', 'Lakshmi Narayan', '9886012001', 'Tiruppur', 'Tamil Nadu', '8, Kangeyam Road', '641604'],
-      ['C-002', 'Farhan Qazi', '9820123456', 'Mumbai', 'Maharashtra', '3rd floor, Lower Parel', '400013'],
-    ] as const) {
-      const row = (await w.pool.query('SELECT id, version FROM partner WHERE code=$1', [code])).rows[0];
-      await w.as('sal', (c) => md.updateParty(c, { partnerId: row.id, expectedVersion: row.version, customerType: code === 'C-002' ? 'distributor' : 'retailer', city, state, phone, email: contact.split(' ')[0].toLowerCase() + '@' + (code === 'C-001' ? 'lakshmigarments' : 'urbanwear') + '.example', paymentDays: 45 }));
-      await w.as('sal', (c) => md.addContact(c, { partnerId: row.id, name: contact, role: 'Purchase', phone, primary: true }));
-      await w.as('sal', (c) => md.addAddress(c, { partnerId: row.id, kind: 'billing', label: 'Head office', line1: line, city, state, pincode: pin, phone }));
-      await w.as('sal', (c) => md.addAddress(c, { partnerId: row.id, kind: 'shipping', label: code === 'C-001' ? 'Godown' : 'Warehouse', line1: code === 'C-001' ? 'Plot 22, SIDCO Industrial Estate' : 'Gala 7, Bhiwandi Logistics Park', line2: 'Gate 2, deliveries 9 to 5', city: code === 'C-001' ? city : 'Bhiwandi', state: code === 'C-001' ? state : 'Maharashtra', pincode: code === 'C-001' ? '641606' : '421302', contactName: contact, phone }));
-    }
-    const m = await w.as('sal', (c) => md.createParty(c, { name: 'Metro Innerwear', role: 'customer', customerType: 'distributor', gstin: '29AAACM5566E1Z9', pan: 'AAACM5566E', city: 'Bengaluru', state: 'Karnataka', phone: '9900112233', email: 'anil@metroinnerwear.example', contact: { name: 'Anil Kumar', phone: '9900112233', role: 'Owner' }, billing: { label: 'Office', line1: '45, Brigade Road', city: 'Bengaluru', state: 'Karnataka', pincode: '560001' }, shippingSameAsBilling: true }));
-    await w.as('sal', (c) => masters.submitPartner(c, { partnerId: m.id, expectedVersion: 1 })); // waiting for commercial approval
-  }
-  // A style with sizes and colours, its SKUs, an approved BOM and a 3-pack box.
-  const st = await w.as('md', (c) => bom.createStyle(c, { code: 'BRF-01', name: 'Classic brief', category: 'Innerwear', hsnCode: '6107', gstRate: '5', sizes: ['S', 'M', 'L', 'XL'], colours: [{ code: 'BLK', name: 'Black' }, { code: 'WHT', name: 'White' }, { code: 'NVY', name: 'Navy' }] }));
+  // An article with sizes and colours, its SKUs, an approved BOM and a 3-pack box. The BOM, planning and production demos use it.
+  const id = async (t: string, code: string) => (await w.pool.query(`SELECT id FROM ${t} WHERE code=$1`, [code])).rows[0].id as string;
+  const kly = await id('brand', 'KLY'), brief = await id('product_category', 'BRIEF'); // read before the command: it holds the connection
+  const st = await w.as('md', (c) => bom.createStyle(c, { code: 'BRF-01', name: 'Rib brief', brandId: kly, categoryId: brief, packing: 'Single piece', rate: '68.00', mrp: '125.00', hsnCode: '6107', gstRate: '5', sizes: ['S', 'M', 'L', 'XL'], colours: [{ code: 'BLK', name: 'Black' }, { code: 'WHT', name: 'White' }, { code: 'NVY', name: 'Navy' }] }));
   await w.as('md', (c) => bom.createSkus(c, { styleId: st.id }));
   const b = await w.as('md', (c) => bom.startBom(c, { styleId: st.id }));
   const saved = await w.as('md', (c) => bom.saveBomLines(c, { bomId: b.id, expectedRev: b.rev, notes: 'First costed BOM', lines: [
@@ -106,6 +93,8 @@ export async function seedMastersDemo(w: World, withSales: boolean) {
   const sub = (await w.pool.query('SELECT rev FROM bom WHERE id=$1', [b.id])).rows[0].rev;
   await w.as('eng', (c) => bom.approveBom(c, { bomId: b.id, expectedRev: sub }));
   const sk = Object.fromEntries((await w.pool.query('SELECT code, id FROM sku WHERE style_id=$1', [st.id])).rows.map((x) => [x.code, x.id]));
-  await w.as('md', (c) => bom.createPack(c, { code: 'BRF-01-3PK-M', name: 'Classic brief 3-pack, size M (black, white, navy)', skus: [{ skuId: sk['BRF-01-BLK-M'], qty: 1 }, { skuId: sk['BRF-01-WHT-M'], qty: 1 }, { skuId: sk['BRF-01-NVY-M'], qty: 1 }], materials: [{ itemId: wbox, qty: '1' }] }));
+  await w.as('md', (c) => bom.createPack(c, { code: 'BRF-01-3PK-M', name: 'Rib brief 3-pack, size M (black, white, navy)', skus: [{ skuId: sk['BRF-01-BLK-M'], qty: 1 }, { skuId: sk['BRF-01-WHT-M'], qty: 1 }, { skuId: sk['BRF-01-NVY-M'], qty: 1 }], materials: [{ itemId: wbox, qty: '1' }] }));
 
+  // The CRM app's articles, so the Finished goods master starts with the same products as the CRM.
+  await seedArticles(w);
 }

@@ -3,7 +3,6 @@ import { freshWorld } from './helpers.js';
 import type { World } from '../src/seed/demo.js';
 import * as md from '../src/domain/master-data.js';
 import * as bulk from '../src/domain/bulk.js';
-import { seedSalesBase } from '../src/seed/sales-demo.js';
 import { seedMastersDemo } from '../src/seed/masters-demo.js';
 
 async function rejects(p: Promise<unknown>, part: string) {
@@ -15,32 +14,17 @@ async function rejects(p: Promise<unknown>, part: string) {
   throw new Error(`Expected a refusal containing "${part}" but it succeeded`);
 }
 let w: World;
-beforeAll(async () => { w = await freshWorld('bulk'); await seedSalesBase(w); await seedMastersDemo(w, true); });
+beforeAll(async () => { w = await freshWorld('bulk'); await seedMastersDemo(w); });
 afterAll(async () => { await w.pool.end(); });
 const uid = (u: string) => w.actors[u].id;
 
-describe('distributors and retailers', () => {
-  it('splits customers by type and keeps old customers as retailers', async () => {
-    const d = await md.listParties(w.pool, uid('sal'), { role: 'customer', customerType: 'distributor' });
-    const r = await md.listParties(w.pool, uid('sal'), { role: 'customer', customerType: 'retailer' });
-    expect(d!.map((x) => x.name)).toEqual(expect.arrayContaining(['Metro Innerwear']));
-    expect(r!.some((x) => x.code === 'C-001')).toBe(true);
-    expect(d!.some((x) => x.code === 'C-001')).toBe(false);
-    const p = await w.as('sal', (c) => md.createParty(c, { name: 'Tiny Shop', role: 'customer' }));
-    expect(p.customer_type).toBe('retailer');
-    await rejects(w.as('sal', (c) => md.createParty(c, { name: 'Odd Shop', role: 'customer', customerType: 'wholesaler' as never })), 'distributor or retailer');
-  });
-});
-
 describe('import and export', () => {
   it('importing the export of a list changes nothing and creates nothing', async () => {
-    for (const head of ['vendors', 'distributors', 'retailers', 'materials', 'finished'] as const) {
-      const { csv, rows } = await bulk.exportCsv(w.pool, uid('md'), head).catch(() => bulk.exportCsv(w.pool, uid('sal'), head));
+    for (const head of ['vendors', 'materials'] as const) {
+      const { csv, rows } = await bulk.exportCsv(w.pool, uid('md'), head);
       expect(rows, head).toBeGreaterThan(0);
-      const scope = head === 'vendors' ? 'vendor' : head === 'distributors' ? 'distributor' : head === 'retailers' ? 'retailer' : undefined;
-      const act = head === 'vendors' || head === 'distributors' || head === 'retailers' ? 'buy' : 'md';
-      const who = head === 'distributors' || head === 'retailers' ? 'sal' : act;
-      const r = await w.as(who, (c) => (scope ? md.importParties(c, csv, true, scope) : md.importMaterials(c, csv, true, head === 'finished' ? 'fg' : 'materials')));
+      const who = head === 'vendors' ? 'buy' : 'md';
+      const r = await w.as(who, (c) => (head === 'vendors' ? md.importParties(c, csv, true, 'vendor') : md.importMaterials(c, csv, true, 'materials')));
       expect(r.errors, head).toEqual([]);
       expect(r.created, head).toBe(0);
       expect(r.updated, head).toBe(rows);
@@ -56,38 +40,33 @@ describe('import and export', () => {
     expect(r2.errors.length).toBeGreaterThan(0);
     expect((await w.pool.query(`SELECT 1 FROM partner WHERE name='Om Trims Two'`)).rowCount).toBe(0);
   });
-  it('keeps distributors, retailers and vendors in their own lists', async () => {
-    const wrong = await w.as('sal', (c) => md.importParties(c, 'name,role\nX Co,vendor\n', true, 'retailer'));
-    expect(wrong.errors[0].message).toContain('retailers only');
-    const ok = await w.as('sal', (c) => md.importParties(c, 'name,role\nBig Dist,distributor\nLittle Shop,retailer\n', false, undefined));
-    expect(ok.created).toBe(2);
-    expect((await md.listParties(w.pool, uid('sal'), { role: 'customer', customerType: 'distributor' }))!.some((x) => x.name === 'Big Dist')).toBe(true);
+  it('the vendor list refuses distributors and retailers: they are kept in the CRM app', async () => {
+    const wrong = await w.as('buy', (c) => md.importParties(c, 'name,role\nBig Dist,distributor\nLittle Shop,retailer\n', true));
+    expect(wrong.errors.map((e) => e.row)).toEqual([2, 3]); expect(wrong.errors[0].message).toContain('CRM app');
+    expect(Object.keys(bulk.HEADS)).not.toContain('distributors'); expect(Object.keys(bulk.HEADS)).not.toContain('retailers');
   });
-  it('finished goods list takes finished-goods types only, materials list refuses them', async () => {
-    const fg = await w.as('md', (c) => md.importMaterials(c, 'type,name,hsn,gst,unit,attr_size,attr_colour\nGARMENT,Basic tee black M,6109,5,PC,M,Black\n', false, 'fg'));
-    expect(fg.created).toBe(1);
-    const r = await w.as('md', (c) => md.importMaterials(c, 'type,name\nGARMENT,Another tee\n', true, 'materials'));
-    expect(r.errors[0].message).toContain('finished-goods type');
-    const r2 = await w.as('md', (c) => md.importMaterials(c, 'type,name\nKNIT,Another knit\n', true, 'fg'));
-    expect(r2.errors[0].message).toContain('not a finished-goods type');
-  });
-  it('adds SKUs from rows and grows the style when a size or colour is new', async () => {
-    const before = (await w.pool.query(`SELECT count(*)::int n FROM sku`)).rows[0].n;
-    const csv = 'style,size,colour_code,colour_name\nBRF-01,XXL,BLK,Black\nBRF-01,S,RED,Red\nBRF-01,S,BLK,Black\n';
-    const dry = await w.as('md', (c) => bulk.importSkus(c, csv, true));
-    expect(dry).toMatchObject({ created: 2, skipped: 1, errors: [] });
-    expect((await w.pool.query(`SELECT count(*)::int n FROM sku`)).rows[0].n).toBe(before);
-    const r = await w.as('md', (c) => bulk.importSkus(c, csv, false));
-    expect(r.created).toBe(2);
-    expect((await w.pool.query(`SELECT 1 FROM sku WHERE code IN ('BRF-01-BLK-XXL','BRF-01-RED-S')`)).rowCount).toBe(2);
-    const bad = await w.as('md', (c) => bulk.importSkus(c, 'style,size,colour_code\nNOPE-1,S,BLK\n', false));
-    expect(bad.errors[0].message).toContain('No style');
+  it('SKU and barcode file: exported, loaded back unchanged, makes missing SKUs and takes printed barcodes', async () => {
+    const e = await bulk.exportCsv(w.pool, uid('md'), 'skus');
+    expect(e.csv.split('\n')[0]).toBe('article,colour_code,cup,size,piece_barcode,box_barcode');
+    const same = await w.as('md', (c) => bulk.importSkus(c, e.csv, true));
+    expect(same).toMatchObject({ created: 0, updated: 0, errors: [] }); expect(same.skipped).toBe(e.rows);
+    // KL-101 is a bra with cups; take one SKU away to see it made again, and give another SKU a printed barcode
+    const free = '8901234567890'; // a valid EAN-13 that the system did not make
+    const csv = `article,colour_code,cup,size,piece_barcode\nKL-101,BLK,B,32/M,${free}\nKL-101,NOPE,B,32/M,\n`;
+    const bad = await w.as('md', (c) => bulk.importSkus(c, csv, false));
+    expect(bad.errors.map((x) => x.row)).toEqual([3]); expect(bad.errors[0].message).toContain('Colour NOPE');
+    const ok = await w.as('md', (c) => bulk.importSkus(c, csv.split('\n').slice(0, 2).join('\n'), false));
+    expect(ok).toMatchObject({ created: 0, updated: 1, errors: [] });
+    expect((await w.pool.query(`SELECT e.source FROM sku_ean e JOIN sku k ON k.id=e.sku_id WHERE e.code=$1 AND k.code='KL-101-BLK-B-32M'`, [free])).rows[0].source).toBe('scanned');
+    const nocup = await w.as('md', (c) => bulk.importSkus(c, 'article,colour_code,size\nKL-101,BLK,32/M\n', true));
+    expect(nocup.errors[0].message).toContain('has cups');
+    const wrong = await w.as('md', (c) => bulk.importSkus(c, 'article,colour_code,cup,size,piece_barcode\nKL-101,BLK,C,32/M,8901234567898\n', true));
+    expect(wrong.errors[0].message).toContain('not a valid EAN-13');
     await rejects(w.as('sto', (c) => bulk.importSkus(c, csv, true)), 'Not permitted');
   });
   it('exports SKUs and quotes values with commas', async () => {
     const e = await bulk.exportCsv(w.pool, uid('md'), 'skus');
-    expect(e.csv.split('\n')[0]).toBe('style,size,colour_code,colour_name');
-    expect(e.rows).toBeGreaterThan(12);
+    expect(e.rows).toBeGreaterThan(150);                      // the CRM's articles and the BRF-01 demo article
     expect(bulk.toCsv(['a'], [['x, "y"']])).toBe('a\n"x, ""y"""\n');
   });
 });

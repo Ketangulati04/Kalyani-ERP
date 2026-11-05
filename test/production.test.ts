@@ -7,7 +7,6 @@ import * as rcv from '../src/domain/receipt.js';
 import * as qc from '../src/domain/qc.js';
 import * as prod from '../src/domain/production.js';
 import { availability } from '../src/domain/inventory.js';
-import { seedSalesBase } from '../src/seed/sales-demo.js';
 import { seedMastersDemo } from '../src/seed/masters-demo.js';
 
 let w: World; let grey: string; let rib: string; let styleId: string; const sku: Record<string, string> = {};
@@ -27,14 +26,17 @@ async function accepted(itemId: string, qty: string): Promise<string> {
 }
 async function passQc(insp: string, qty: string, lot?: string): Promise<string> {
   await w.as('qci', (c) => qc.startInspection(c, { inspectionId: insp }));
-  await w.as('qci', async (c) => qc.submitInspection(c, { inspectionId: insp, expectedVersion: await ver('qc_inspection', insp), inspectedQty: qty, recommendAccept: qty, recommendReject: '0' }));
-  await w.as('qcm', async (c) => qc.dispositionInspection(c, { inspectionId: insp, expectedVersion: await ver('qc_inspection', insp), acceptQty: qty, rejectQty: '0' }));
+  // read versions before the command: inside it the command holds the connection (PGlite has only one)
+  const v1 = await ver('qc_inspection', insp);
+  await w.as('qci', (c) => qc.submitInspection(c, { inspectionId: insp, expectedVersion: v1, inspectedQty: qty, recommendAccept: qty, recommendReject: '0' }));
+  const v2 = await ver('qc_inspection', insp);
+  await w.as('qcm', (c) => qc.dispositionInspection(c, { inspectionId: insp, expectedVersion: v2, acceptQty: qty, rejectQty: '0' }));
   return lot ?? (await w.pool.query('SELECT lot_id FROM qc_inspection WHERE id=$1', [insp])).rows[0].lot_id;
 }
 const acc = async (lot: string) => Number((await availability(w.pool, lot)).available);
 
 beforeAll(async () => {
-  w = await freshWorld('production'); await seedSalesBase(w); await seedMastersDemo(w, true);
+  w = await freshWorld('production'); await seedMastersDemo(w);
   await w.addUser('pln', 'PLN', { displayName: 'Planner' });
   grey = w.items.fabric;
   rib = (await w.pool.query(`SELECT id FROM item WHERE name LIKE 'Rib knit 220%'`)).rows[0].id;
@@ -96,7 +98,7 @@ describe('cutting: issue by BOM, yield below plan, QC, shortfall re-planned', ()
   it('lists the orders for those who may see them, and hides them from others', async () => {
     expect((await prod.listWorkOrders(w.pool, w.actors.pln.id)).length).toBe(2);
     expect((await prod.listWorkOrders(w.pool, w.actors.sto.id)).length).toBe(2);
-    await rejects(w.as('sal', (c) => prod.createCutOrder(c, { siteId: w.siteId, styleId, lines: [{ skuId: sku['BRF-01-BLK-M'], qty: 1 }] })), /Not permitted/);
+    await rejects(w.as('qci', (c) => prod.createCutOrder(c, { siteId: w.siteId, styleId, lines: [{ skuId: sku['BRF-01-BLK-M'], qty: 1 }] })), /Not permitted/);
   });
   it('cancels only a draft', async () => {
     let d = await w.as('pln', (c) => prod.createCutOrder(c, { siteId: w.siteId, styleId, lines: [{ skuId: sku['BRF-01-WHT-M'], qty: 10 }] }));

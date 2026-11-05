@@ -2,10 +2,15 @@ import pg from 'pg';
 import { createPool } from '../src/db/pool.js';
 import { buildWorld, type World } from '../src/seed/demo.js';
 
-const ADMIN_URL = process.env.PG_ADMIN_URL ?? 'postgres://postgres@localhost:5433/postgres';
+const ADMIN_URL = process.env.PG_ADMIN_URL;
 
-/** A fresh, fully-built database per test file. */
+/** A fresh, fully-built database per test file. With PG_ADMIN_URL set it is a real PostgreSQL database;
+ *  without it, an in-memory PGlite (the same engine the browser demo runs on), so tests need no Docker. */
 export async function freshWorld(name: string): Promise<World> {
+  if (!ADMIN_URL) {
+    const { LitePool } = await import('../ui/lite-pool.js');
+    return buildWorld((await LitePool.create()) as unknown as Parameters<typeof buildWorld>[0]);
+  }
   const db = `erp_test_${name}`;
   const admin = new pg.Client({ connectionString: ADMIN_URL });
   await admin.connect();

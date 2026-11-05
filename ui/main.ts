@@ -21,8 +21,8 @@ import * as P from './views-reports.js';
 import * as O2 from './views-overview.js';
 import * as B from './views-barcode.js';
 import * as PF from './po-form.js';
-import * as SL from './views-sales.js';
 import * as MX from './views-masters.js';
+import * as CT from './views-catalog.js';
 import * as BM from './views-bom.js';
 import * as BK from './views-bulk.js';
 import * as PN from './views-plan.js';
@@ -34,26 +34,22 @@ import * as P0 from '../src/domain/reports.js';
 declare const __BUILD_ID__: string;
 
 type Item = { id: View; label: string; hint: string };
-const GROUPS: { title: string; key: 'control' | 'reports' | 'sales' | 'masters' | 'products' | 'planning' | 'work' | 'ops' | 'people' | 'admin'; items: Item[] }[] = [
+const GROUPS: { title: string; key: 'control' | 'reports' | 'masters' | 'products' | 'planning' | 'work' | 'ops' | 'people' | 'admin'; items: Item[] }[] = [
   { title: 'Control', key: 'control', items: [
     { id: 'owner', label: 'Owner desk', hint: 'Every process on one page' },
     { id: 'escalations', label: 'Urgent approvals', hint: 'Escalate and follow' } ] },
   { title: 'Reports', key: 'reports', items: [
     { id: 'reports', label: 'Reports', hint: 'Figures and exports' } ] },
-  { title: 'Sales', key: 'sales', items: [
-    { id: 'crm', label: 'CRM', hint: 'Leads and follow-ups' },
-    { id: 'quotes', label: 'Quotations', hint: 'Prices offered' },
-    { id: 'sales', label: 'Sales orders', hint: 'Orders, stock, dispatch' } ] },
   { title: 'Masters', key: 'masters', items: [
     { id: 'vendors', label: 'Vendors', hint: 'Who you buy from' },
-    { id: 'distributors', label: 'Distributors', hint: 'Who buys in volume and resells' },
-    { id: 'retailers', label: 'Retailers', hint: 'Who sells to the end customer' },
-    { id: 'skus', label: 'SKUs', hint: 'Every size and colour of every style' },
+    { id: 'finished', label: 'Finished goods', hint: 'Articles: colours, sizes, prices, barcodes' },
+    { id: 'brands', label: 'Brands', hint: 'Kalyani, Maashie and others' },
+    { id: 'categories', label: 'Categories', hint: 'Bra, brief, vest… with HSN' },
+    { id: 'colours', label: 'Colours', hint: 'Colour codes for articles' },
     { id: 'materials', label: 'Materials', hint: 'Everything bought or made for production' },
-    { id: 'finished', label: 'Finished goods', hint: 'What you sell' },
     { id: 'mtypes', label: 'Material types', hint: 'What each kind must record, units' } ] },
   { title: 'Products', key: 'products', items: [
-    { id: 'products', label: 'Styles, SKUs & BOM', hint: 'Sizes, colours, bills of materials, packs' } ] },
+    { id: 'products', label: 'BOM & packs', hint: 'What each piece is made of, final boxes' } ] },
   { title: 'Planning', key: 'planning', items: [
     { id: 'planning', label: 'Production plan', hint: 'Six months ahead, minimum stock, purchase requests' } ] },
   { title: 'Production', key: 'work', items: [
@@ -78,7 +74,7 @@ const GROUPS: { title: string; key: 'control' | 'reports' | 'sales' | 'masters' 
 ];
 const ALL_VIEWS: View[] = ['overview', 'account', ...GROUPS.flatMap((g) => g.items.map((i) => i.id))];
 
-let vis = { ops: true, users: false, audit: false, owner: false, esc: false, rep: false, masters: false, ai: false, mat: false, ven: false, cli: false, sales: false, prod: false, plan: false, work: false, crm: false, quotes: false, sord: false };
+let vis = { ops: true, users: false, audit: false, owner: false, esc: false, rep: false, masters: false, ai: false, mat: false, ven: false, prod: false, plan: false, work: false };
 const rollBar = (r: { held: string; accepted: string; rejected: string; reserved: string; available: string }) => {
   const held = Number(r.held), rej = Number(r.rejected), res = Number(r.reserved), av = Math.max(Number(r.available), 0);
   const tot = held + rej + res + av || 1;
@@ -268,6 +264,7 @@ const ICONS: Record<string, string> = {
   employees: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0 M20 21v-2a4 4 0 0 0-3-4 M17 3a4 4 0 0 1 0 8', attendance: 'M12 8v5l3 2 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
   leave: 'M3 5h18v16H3z M3 10h18 M8 3v4 M16 3v4', payroll: 'M3 5h17v15H3z M3 5V3h14 M15 10h7v6h-7z', users: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
   owner: 'M3 3h18v6H3z M3 13h8v8H3z M15 13h6v8h-6z', escalations: 'M12 2 2 20h20z M12 9v5 M12 17h.01', crm: 'M16 11a4 4 0 1 0-8 0 M4 21a8 8 0 0 1 16 0', quotes: 'M6 3h9l4 4v14H6z M9 12h7 M9 16h7', materials: 'M4 7l8-4 8 4-8 4z M4 12l8 4 8-4 M4 17l8 4 8-4', mtypes: 'M3 6h18 M3 12h12 M3 18h8', vendors: 'M3 21V8l9-5 9 5v13 M9 21v-6h6v6', clients: 'M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2 M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M21 21v-2a4 4 0 0 0-3-3.9', aimodels: 'M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z',  sales: 'M3 17l5-5 4 4 8-9 M15 7h5v5', barcodes: 'M4 5v14 M7 5v14 M11 5v14 M14 5v14 M18 5v14 M21 5v14', reports: 'M4 20V10 M10 20V4 M16 20v-7 M22 20H2',
+  finished: 'M20 12 12 20 4 12V4h8z M8 8h.01', brands: 'M12 2l3 7h7l-5.5 4.5 2 7.5-6.5-4.5-6.5 4.5 2-7.5L2 9h7z', categories: 'M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z', colours: 'M12 3a9 9 0 1 0 0 18c1 0 2-1 2-2s-1-2 0-3 3 0 4-1 3-3 3-5c0-4-4-7-9-7z M7.5 11h.01 M10.5 7.5h.01 M15 7.5h.01',
   roles: 'm12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6z', signins: 'M10 13a5 5 0 0 0 7 0l4-4a5 5 0 0 0-7-7l-2 2 M14 11a5 5 0 0 0-7 0l-4 4a5 5 0 0 0 7 7l2-2' };
 const icon = (id: string) => raw(`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[id] ?? ICONS.overview}"/></svg>`);
 const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
@@ -279,14 +276,14 @@ const DEMO_NOTE = 'Demo data lives only in this browser. Every account uses the 
 
 function shell(content: Raw): string {
   const me = PEOPLE[S.user] ?? { name: S.user, role: '' };
-  const items = (g: (typeof GROUPS)[number]) => g.items.filter((n) => (g.key === 'control' ? (n.id === 'owner' ? vis.owner : vis.esc) : g.key === 'masters' ? (n.id === 'vendors' ? vis.ven : n.id === 'distributors' || n.id === 'retailers' ? vis.cli : n.id === 'skus' ? vis.prod : vis.mat) : g.key === 'sales' ? (n.id === 'crm' ? vis.crm : n.id === 'quotes' ? vis.quotes : vis.sord) : g.key === 'admin' ? (n.id === 'aimodels' ? vis.ai : n.id === 'roles' || (n.id === 'audit' ? vis.audit : vis.users)) : true));
+  const items = (g: (typeof GROUPS)[number]) => g.items.filter((n) => (g.key === 'control' ? (n.id === 'owner' ? vis.owner : vis.esc) : g.key === 'masters' ? (n.id === 'vendors' ? vis.ven : n.id === 'finished' ? vis.prod : vis.mat) : g.key === 'admin' ? (n.id === 'aimodels' ? vis.ai : n.id === 'roles' || (n.id === 'audit' ? vis.audit : vis.users)) : true));
   return html`
   <aside class="sidebar">
     <div class="brand"><img class="brand-logo" src="kalyani-logo.png" alt="Kalyani" /><span class="erp-label">Operations ERP · demo</span></div>
     <div class="workspace"><b>Kalyani Plant 1</b><small>Demo data, this browser only</small></div>
     <div class="nav-scroll"><nav class="side" aria-label="Sections">
       <a href="#overview" class="${S.view === 'overview' ? 'on' : ''}" data-view="overview">${icon('overview')}Overview</a>
-      ${GROUPS.filter((g) => (g.key !== 'ops' || vis.ops) && (g.key !== 'control' || vis.owner || vis.esc) && (g.key !== 'reports' || vis.rep) && (g.key !== 'sales' || vis.sales) && (g.key !== 'masters' || vis.masters) && (g.key !== 'products' || vis.prod) && (g.key !== 'planning' || vis.plan) && (g.key !== 'work' || vis.work)).map((g) => { const its = items(g); const has = its.some((n) => n.id === S.view); if (has) navOpen.add(g.key); const o = navOpen.has(g.key); return html`<button type="button" class="grp ${o ? 'open' : ''} ${has ? 'cur' : ''}" data-grp="${g.key}" aria-expanded="${o}">${g.title}<span class="grp-n">${its.length}</span>${raw('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>')}</button><div class="grp-items ${o ? '' : 'shut'}" data-items="${g.key}">${its.map((n) => html`<a href="#${n.id}" class="${n.id === S.view ? 'on' : ''}" data-view="${n.id}" title="${n.hint}">${icon(n.id)}${n.label}</a>`)}</div>`; })}
+      ${GROUPS.filter((g) => (g.key !== 'ops' || vis.ops) && (g.key !== 'control' || vis.owner || vis.esc) && (g.key !== 'reports' || vis.rep) && (g.key !== 'masters' || vis.masters) && (g.key !== 'products' || vis.prod) && (g.key !== 'planning' || vis.plan) && (g.key !== 'work' || vis.work)).map((g) => { const its = items(g); const has = its.some((n) => n.id === S.view); if (has) navOpen.add(g.key); const o = navOpen.has(g.key); return html`<button type="button" class="grp ${o ? 'open' : ''} ${has ? 'cur' : ''}" data-grp="${g.key}" aria-expanded="${o}">${g.title}<span class="grp-n">${its.length}</span>${raw('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>')}</button><div class="grp-items ${o ? '' : 'shut'}" data-items="${g.key}">${its.map((n) => html`<a href="#${n.id}" class="${n.id === S.view ? 'on' : ''}" data-view="${n.id}" title="${n.hint}">${icon(n.id)}${n.label}</a>`)}</div>`; })}
     </nav></div>
     <div class="side-bottom"><button class="ghost reset" data-act="reset">Reset demo data</button></div>
   </aside>
@@ -327,18 +324,13 @@ async function computeVis() {
     users: await can(db, uid(), 'user.view', { anySite: true }),
     audit: await can(db, uid(), 'audit.view', { anySite: true }),
     owner: await can(db, uid(), 'owner.view', { anySite: true }),
-    sales: (await Promise.all(['crm.view', 'so.view', 'quote.create'].map((p) => can(db, uid(), p, { anySite: true })))).some(Boolean),
-    crm: await can(db, uid(), 'crm.view', { anySite: true }),
-    quotes: await can(db, uid(), 'quote.create', { anySite: true }) || await can(db, uid(), 'sales.view', { anySite: true }),
-    sord: await can(db, uid(), 'so.view', { anySite: true }),
     ai: await can(db, uid(), 'ai.manage', { anySite: true }),
     mat: await can(db, uid(), 'item.view', { anySite: true }),
     ven: await can(db, uid(), 'partner.view', { anySite: true }),
-    cli: await can(db, uid(), 'partner.view', { anySite: true }) || await can(db, uid(), 'so.view', { anySite: true }),
     prod: await can(db, uid(), 'bom.view', { anySite: true }),
     plan: await can(db, uid(), 'plan.view', { anySite: true }),
     work: await can(db, uid(), 'production.view', { anySite: true }),
-    masters: (await Promise.all(['item.view', 'partner.view', 'so.view'].map((p) => can(db, uid(), p, { anySite: true })))).some(Boolean),
+    masters: (await Promise.all(['item.view', 'partner.view'].map((p) => can(db, uid(), p, { anySite: true })))).some(Boolean),
     rep: (await P0.listReports(db, uid())).length > 0,
     esc: await can(db, uid(), 'escalation.view', { anySite: true }) || await can(db, uid(), 'owner.view', { anySite: true }),
   }));
@@ -347,7 +339,7 @@ async function computeVis() {
 const VIEWS: Record<View, () => Promise<Raw>> = {
   overview, po: poView, receiving: receivingView, quality: qualityView, stock: stockView, audit: auditView,
   employees: H.employeesView, attendance: H.attendanceView, leave: H.leaveView, payroll: H.payrollView,
-  owner: O.ownerView, escalations: O.escalationsView, reports: P.reportsView, barcodes: B.barcodesView, crm: SL.crmView, quotes: SL.quotesView, sales: SL.salesView, materials: MX.materialsView, mtypes: MX.typesView, vendors: MX.vendorsView, distributors: MX.distributorsView, retailers: MX.retailersView, finished: MX.finishedView, skus: BK.skusView, clients: MX.retailersView, work: WK.workView, products: BM.productsView, planning: PN.planningView, aimodels: AI.aiView, users: A.usersView, roles: A.rolesView, signins: A.signinsView, account: A.accountView,
+  owner: O.ownerView, escalations: O.escalationsView, reports: P.reportsView, barcodes: B.barcodesView, materials: MX.materialsView, mtypes: MX.typesView, vendors: MX.vendorsView, finished: CT.finishedView, brands: CT.brandsView, categories: CT.categoriesView, colours: CT.coloursView, work: WK.workView, products: BM.productsView, planning: PN.planningView, aimodels: AI.aiView, users: A.usersView, roles: A.rolesView, signins: A.signinsView, account: A.accountView,
 };
 
 let queued = false;
@@ -407,8 +399,8 @@ document.addEventListener('click', async (ev) => {
   if (await O.onClick(t)) return;
   if (await P.onClick(t)) return;
   if (await B.onClick(t)) return;
-  if (await SL.onClick(t)) return;
   if (await MX.onClick(t)) return;
+  if (await CT.onClick(t)) return;
   if (await BM.onClick(t)) return;
   if (await BK.onClick(t)) return;
   if (await PN.onClick(t)) return;
@@ -462,12 +454,12 @@ document.addEventListener('submit', async (ev) => {
   if (await O.onSubmit(f.dataset.form!)) return;
   if (await P.onSubmit(f.dataset.form!)) return;
   if (await B.onSubmit(f.dataset.form!, ev)) return;
-  if (await SL.onSubmit(f.dataset.form!, f)) return;
   if (await BM.onSubmit(f.dataset.form!, f)) return;
   if (await BK.onSubmit(f.dataset.form!, f, ev as SubmitEvent)) return;
   if (await PN.onSubmit(f.dataset.form!)) return;
   if (await WK.onSubmit(f.dataset.form!)) return;
   if (await MX.onSubmit(f.dataset.form!, f, ev as SubmitEvent)) return;
+  if (await CT.onSubmit(f.dataset.form!, f)) return;
   if (await AI.onSubmit(f.dataset.form!, f)) return;
   switch (f.dataset.form) {
     case 'newpo': return void (await PF.onSubmit());
@@ -498,6 +490,7 @@ document.addEventListener('change', async (ev) => {
     return render();
   }
   if (await MX.onChange(t)) return;
+  if (await CT.onChange(t)) return;
   if (await BM.onChange(t)) return;
   if (await BK.onChange(t)) return;
   if (await PN.onChange(t)) return;
@@ -510,6 +503,7 @@ document.addEventListener('change', async (ev) => {
 document.addEventListener('input', async (ev) => {
   const t = ev.target as HTMLInputElement;
   if (await MX.onInput(t)) return;
+  if (await CT.onInput(t)) return;
   if (await BK.onInput(t)) return;
   if (t.id === 'filter') { S.filter = t.value; render(); }
 });

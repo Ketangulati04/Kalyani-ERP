@@ -8,8 +8,8 @@ import * as admin from '../domain/admin.js';
 import * as masters from '../domain/masters.js';
 import { seedHrBase, seedHrRecent } from './hr-demo.js';
 import { seedOwnerBase, seedOwnerFloor } from './owner-demo.js';
-import { seedSalesBase, seedSalesFloor } from './sales-demo.js';
 import { seedMastersDemo } from './masters-demo.js';
+import { seedCatalog } from './catalog-demo.js';
 import { seedPlanningDemo } from './planning-demo.js';
 import { seedAiDemo } from './ai-demo.js';
 
@@ -35,7 +35,7 @@ export async function bootstrapAdmin(pool: Pool, username: string, password: str
   return { id: u.id, username };
 }
 
-export async function buildWorld(pool: Pool, password = 'Demo-Passw0rd!', opts: { recent?: boolean; owner?: boolean; sales?: boolean; masters?: boolean } = {}): Promise<World> {
+export async function buildWorld(pool: Pool, password = 'Demo-Passw0rd!', opts: { recent?: boolean; owner?: boolean; masters?: boolean } = {}): Promise<World> {
   await migrate(pool);
   await seedRbac(pool);
   const actors: Record<string, Actor> = {};
@@ -100,12 +100,11 @@ export async function buildWorld(pool: Pool, password = 'Demo-Passw0rd!', opts: 
 
   const rate = await as('buy', (c) => masters.proposeRate(c, { partnerId: v.id, itemId: fab.id, rate: '250.0000', effectiveFrom: '2026-01-01' }));
   await as('com', (c) => masters.approveRate(c, { rateId: rate.id }));
+  await seedCatalog(world);
   await seedHrBase(world, password);
   await seedOwnerBase(world);
   if (opts.recent !== false) await seedHrRecent(world);
-  if (opts.sales) await seedSalesBase(world);
   if (opts.owner) await seedOwnerFloor(world);
-  if (opts.owner && opts.sales) await seedSalesFloor(world);
-  if (opts.masters) { await seedMastersDemo(world, !!opts.sales); await seedPlanningDemo(world); await seedAiDemo(world); }
+  if (opts.masters) { await seedMastersDemo(world); await seedPlanningDemo(world); await seedAiDemo(world); }
   return world;
 }

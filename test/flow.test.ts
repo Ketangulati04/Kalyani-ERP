@@ -5,12 +5,11 @@ import * as plan from '../src/domain/planning.js';
 import * as po from '../src/domain/po.js';
 import * as rcv from '../src/domain/receipt.js';
 import * as qc from '../src/domain/qc.js';
-import { seedSalesBase } from '../src/seed/sales-demo.js';
 import { seedMastersDemo } from '../src/seed/masters-demo.js';
 
 let w: World; let grey: string; let blk: string; let rib: string;
 beforeAll(async () => {
-  w = await freshWorld('flow'); await seedSalesBase(w); await seedMastersDemo(w, true);
+  w = await freshWorld('flow'); await seedMastersDemo(w);
   await w.addUser('pln', 'PLN', { displayName: 'Planner' });
   grey = w.items.fabric;
   blk = (await w.pool.query(`SELECT item_id FROM sku WHERE code='BRF-01-BLK-M'`)).rows[0].item_id;

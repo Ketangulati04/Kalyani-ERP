@@ -4,10 +4,10 @@ import * as bom from '../src/domain/bom.js';
 import { can } from '../src/core/permissions.js';
 
 const ANY = { anySite: true } as const;
-type Ln = { section: string; itemId: string; qty: string; wastage: string; sizes: string[] | null; colours: string[] | null; qbs: Record<string, string>; note: string; open: boolean };
+type Ln = { section: string; itemId: string; qty: string; wastage: string; sizes: string[] | null; colours: string[] | null; cups: string[] | null; qbs: Record<string, string>; note: string; open: boolean };
 type Pk = { skus: { skuId: string; qty: string }[]; mats: { itemId: string; qty: string }[] };
 const st = {
-  tab: 'styles' as 'styles' | 'bom' | 'packs' | 'plan',
+  tab: 'bom' as 'bom' | 'packs' | 'plan', // articles, their SKUs and barcodes are on the Finished goods screen
   styleId: '', bomId: '', skuPrev: '',
   ed: null as null | { bomId: string; rev: number; lines: Ln[]; notes: string },
   pk: { skus: [], mats: [] } as Pk, pkCode: '', pkName: '', pkNotes: '',
@@ -46,6 +46,7 @@ function syncLines() {
     const boxes = (kind: string) => [...document.querySelectorAll(`input[data-bl="${i}-${kind}"]`)] as HTMLInputElement[];
     const sz = boxes('sz'); if (sz.length) { const on = sz.filter((b) => b.checked).map((b) => b.value); l.sizes = on.length === sz.length ? null : on; }
     const co = boxes('co'); if (co.length) { const on = co.filter((b) => b.checked).map((b) => b.value); l.colours = on.length === co.length ? null : on; }
+    const cu = boxes('cu'); if (cu.length) { const on = cu.filter((b) => b.checked).map((b) => b.value); l.cups = on.length === cu.length ? null : on; }
     const q: Record<string, string> = {}; document.querySelectorAll(`input[data-bq="${i}"]`).forEach((e) => { const x = e as HTMLInputElement; if (x.value.trim()) q[x.dataset.size!] = x.value.trim(); });
     if (document.querySelector(`input[data-bq="${i}"]`)) l.qbs = q;
   });
@@ -58,8 +59,8 @@ function syncPack() {
 }
 const syncPlan = () => document.querySelectorAll('input[data-plan]').forEach((e) => { const x = e as HTMLInputElement; st.plan[x.dataset.plan!] = x.value.trim(); });
 
-const toLn = (l: Record<string, unknown>): Ln => ({ section: l.section as string, itemId: l.item_id as string, qty: String(l.qty_t ?? l.qty), wastage: String(Number(l.wastage_pct)), sizes: (l.sizes as string[] | null)?.length ? (l.sizes as string[]) : null, colours: (l.colours as string[] | null)?.length ? (l.colours as string[]) : null, qbs: Object.fromEntries(Object.entries((l.qty_by_size ?? {}) as Record<string, unknown>).map(([k, v]) => [k, String(v)])), note: (l.note as string) ?? '', open: false });
-const blank = (section = 'FABRIC'): Ln => ({ section, itemId: '', qty: '', wastage: '0', sizes: null, colours: null, qbs: {}, note: '', open: true });
+const toLn = (l: Record<string, unknown>): Ln => ({ section: l.section as string, itemId: l.item_id as string, qty: String(l.qty_t ?? l.qty), wastage: String(Number(l.wastage_pct)), sizes: (l.sizes as string[] | null)?.length ? (l.sizes as string[]) : null, colours: (l.colours as string[] | null)?.length ? (l.colours as string[]) : null, cups: (l.cups as string[] | null)?.length ? (l.cups as string[]) : null, qbs: Object.fromEntries(Object.entries((l.qty_by_size ?? {}) as Record<string, unknown>).map(([k, v]) => [k, String(v)])), note: (l.note as string) ?? '', open: false });
+const blank = (section = 'FABRIC'): Ln => ({ section, itemId: '', qty: '', wastage: '0', sizes: null, colours: null, cups: null, qbs: {}, note: '', open: true });
 
 // ───────────── the view ─────────────
 export async function productsView(): Promise<Raw> {
@@ -82,9 +83,9 @@ export async function productsView(): Promise<Raw> {
   if (d.bm && ['draft'].includes(d.bm.bom.status) && d.create && (!st.ed || st.ed.bomId !== d.bm.bom.id)) st.ed = { bomId: d.bm.bom.id, rev: d.bm.bom.rev, lines: d.bm.lines.map(toLn), notes: d.bm.bom.notes ?? '' };
   if (!d.bm || d.bm.bom.status !== 'draft') st.ed = null;
   const tab = (id: typeof st.tab, label: string) => html`<button class="${st.tab === id ? 'on' : ''}" data-act="bm-tab" data-id="${id}">${label}</button>`;
-  const tabs = html`<div class="tabs">${tab('styles', 'Styles & SKUs')}${tab('bom', 'BOM builder')}${tab('packs', 'Packs (final box)')}${tab('plan', 'Requirements')}</div>`;
-  const body = st.tab === 'styles' ? stylesTab(d) : st.tab === 'bom' ? bomTab(d) : st.tab === 'packs' ? packsTab(d) : planTab(d);
-  return html`${head('Products and BOM', 'A style has sizes and colours. Each size and colour is a SKU. A BOM says what one piece needs, and a pack is the final box.', d.create ? html`<div class="row"><button class="primary" data-act="bm-newstyle">New style</button></div>` : undefined)}${tabs}${body}`;
+  const tabs = html`<div class="tabs">${tab('bom', 'BOM builder')}${tab('packs', 'Packs (final box)')}${tab('plan', 'Requirements')}</div>`;
+  const body = st.tab === 'bom' ? bomTab(d) : st.tab === 'packs' ? packsTab(d) : planTab(d);
+  return html`${head('BOM and packs', 'What one piece of each article needs, version by version, and the final boxes. Articles, their colours, cups, sizes and SKUs are set up in Masters → Finished goods.')}${tabs}${body}`;
 }
 type D = NonNullable<Awaited<ReturnType<typeof loadType>>>;
 declare function loadType(): Promise<{
@@ -95,38 +96,10 @@ declare function loadType(): Promise<{
 
 const stylePicker = (d: D) => html`<label class="inline">Style <select id="bm-style" data-bm="style">${opts(d.styles.map((s) => ({ id: s.id, label: `${s.code} · ${s.name}` })), st.styleId)}</select></label>`;
 
-// ── Styles & SKUs ──
-function stylesTab(d: D): Raw {
-  const s = d.sel?.style;
-  const newForm = st.newStyle ? html`<form class="card form" data-form="bm-newstyle"><h2>New style</h2>
-    <div class="grid2"><label>Style code<input id="ns-code" placeholder="BRF-01" value="${st.draft['ns-code'] ?? ''}" /></label><label>Name<input id="ns-name" placeholder="Classic brief" value="${st.draft['ns-name'] ?? ''}" /></label>
-    <label>Category <small>(optional)</small><input id="ns-cat" placeholder="Innerwear" value="${st.draft['ns-cat'] ?? ''}" /></label><label>HSN <small>(optional)</small><input id="ns-hsn" value="${st.draft['ns-hsn'] ?? ''}" /></label>
-    <label>GST % <small>(optional)</small><input id="ns-gst" inputmode="decimal" value="${st.draft['ns-gst'] ?? ''}" /></label></div>
-    <label>Sizes <small>(separate with commas)</small><input id="ns-sizes" placeholder="S, M, L, XL" value="${st.draft['ns-sizes'] ?? ''}" /></label>
-    <label>Colours <small>(code:name, one per line or comma separated)</small><textarea id="ns-cols" rows="3" placeholder="BLK:Black, WHT:White, NVY:Navy">${st.draft['ns-cols'] ?? ''}</textarea></label>
-    <div class="row"><button class="primary" type="submit">Save style</button><button type="button" data-act="bm-newstyle">Close</button></div></form>` : '';
-  const list = html`<section class="card"><h2>Styles</h2>${d.styles.length ? html`<div class="scroll"><table class="mini"><thead><tr><th>Code</th><th>Name</th><th class="r">Sizes</th><th class="r">Colours</th><th class="r">SKUs</th><th>BOM</th></tr></thead><tbody>${d.styles.map((x) => html`<tr class="pick ${x.id === st.styleId ? 'on' : ''}" tabindex="0" data-act="bm-style" data-id="${x.id}"><td class="mono">${x.code}</td><td>${x.name}</td><td class="r">${x.n_sizes}</td><td class="r">${x.n_colours}</td><td class="r">${x.n_skus}</td><td>${x.open_status ? bChip(x.open_status) : x.active_version ? html`<span class="chip ok">v${x.active_version} in use</span>` : html`<span class="chip neutral">none</span>`}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">No styles yet.${d.create ? ' Press “New style”.' : ''}</p>`}</section>`;
-  if (!s || !d.sel) return html`${newForm}${list}`;
-  const sizes = s.sizes as string[]; const cols = s.colours as { code: string; name: string }[];
-  const byKey = new Map(d.sel.skus.map((k) => [`${k.colour_code}|${k.size}`, k]));
-  const missing = cols.flatMap((c) => sizes.filter((z) => !byKey.has(`${c.code}|${z}`)).map((z) => `${c.code}|${z}`));
-  const pickN = [...st.pickCells].filter((k) => missing.includes(k)).length;
-  const grid = html`<div class="scroll"><table class="mini"><thead><tr><th>Colour</th>${sizes.map((z) => html`<th class="r">${z}</th>`)}<th></th></tr></thead><tbody>${cols.map((c) => html`<tr><td><b class="mono">${c.code}</b> ${c.name}</td>${sizes.map((z) => { const k = byKey.get(`${c.code}|${z}`); const key = `${c.code}|${z}`; return k ? html`<td class="r" title="${k.code}">${chip(k.status === 'active' ? 'active' : 'draft', k.status === 'active' ? 'ready' : 'draft')}</td>` : d.create ? html`<td class="r"><input type="checkbox" data-cell="${key}" ${st.pickCells.has(key) ? raw('checked') : ''} aria-label="Create ${c.code} ${z}" /></td>` : html`<td class="r">–</td>`; })}<td>${d.create && missing.some((m) => m.startsWith(c.code + '|')) ? html`<button class="link" data-act="bm-rowall" data-id="${c.code}">tick row</button>` : ''}</td></tr>`)}</tbody></table></div>`;
-  const edit = st.editStyle ? html`<form class="card form" data-form="bm-editstyle"><h3>Change ${s.code}</h3><p class="sub">Add sizes or colours any time. A size or colour that SKUs or BOM lines use cannot be removed.</p>
-    <div class="grid2"><label>Name<input id="es-name" value="${s.name}" /></label><label>Category<input id="es-cat" value="${s.category ?? ''}" /></label></div>
-    <label>Sizes<input id="es-sizes" value="${sizes.join(', ')}" /></label><label>Colours <small>(code:name)</small><textarea id="es-cols" rows="3">${cols.map((c) => `${c.code}:${c.name}`).join(', ')}</textarea></label>
-    <div class="row"><button class="primary" type="submit">Save changes</button><button type="button" data-act="bm-editstyle">Close</button></div></form>` : '';
-  return html`${newForm}${list}
-  <section class="card"><div class="row between"><h2>${s.code} · ${s.name}</h2>${d.create ? html`<button data-act="bm-editstyle">Change sizes and colours</button>` : ''}</div>
-    <p class="sub">${s.category ?? 'No category'} · ${sizes.length} sizes × ${cols.length} colours = ${sizes.length * cols.length} possible SKUs · ${d.sel.skus.length} made</p>${edit}
-    ${grid}
-    ${d.create ? html`<div class="row"><button class="primary" data-act="bm-makeskus" ${pickN ? '' : raw('disabled')}>Create ${pickN} ticked SKU${pickN === 1 ? '' : 's'}</button><button data-act="bm-makeall" ${missing.length ? '' : raw('disabled')}>Create all ${missing.length} missing</button></div><p class="note">A new SKU is a draft stock item with its own barcode. It becomes ready when a BOM for this style is approved.</p>` : ''}</section>`;
-}
-
 // ── BOM builder ──
 function bomTab(d: D): Raw {
-  if (!d.sel) return html`<section class="card"><p class="empty">Make a style first.</p></section>`;
-  const s = d.sel.style; const sizes = s.sizes as string[]; const cols = s.colours as { code: string; name: string }[];
+  if (!d.sel) return html`<section class="card"><p class="empty">Add an article in Masters → Finished goods first.</p></section>`;
+  const s = d.sel.style; const sizes = s.sizes as string[]; const cols = s.colours as { code: string; name: string }[]; const cups = (s.cups ?? []) as string[];
   const b = d.bm?.bom; const open = d.sel.boms.find((x) => ['draft', 'submitted'].includes(x.status));
   const versions = html`<section class="card"><div class="row between"><h2>Versions</h2>${d.create && !open && d.sel.skus.length ? html`<button class="primary" data-act="bm-start">${d.sel.boms.length ? 'Start a new version' : 'Start the BOM'}</button>` : ''}</div>
     ${d.sel.boms.length ? html`<div class="scroll"><table class="mini"><thead><tr><th>Version</th><th>Status</th><th class="r">Lines</th><th>Made by</th><th>Approved</th></tr></thead><tbody>${d.sel.boms.map((x) => html`<tr class="pick ${x.id === st.bomId ? 'on' : ''}" tabindex="0" data-act="bm-pick" data-id="${x.id}"><td>v${x.version}</td><td>${bChip(x.status)}</td><td class="r">${x.n_lines}</td><td>${x.creator ?? ''}</td><td>${x.approved_at ? html`${dateOnly(String(x.effective_from ?? '').slice(0, 10))} by ${x.approver}` : x.return_reason ? html`<span class="warn-t">returned: ${x.return_reason}</span>` : '–'}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">${d.sel.skus.length ? 'No BOM yet.' : 'Create the SKUs on the first tab before starting a BOM.'}</p>`}</section>`;
@@ -135,7 +108,7 @@ function bomTab(d: D): Raw {
   const itemsFor = (sec: string, cur: string) => d.items.filter((i) => i.kind === sec || i.id === cur);
   const lineRow = (l: Ln, i: number) => {
     const it = d.items.find((x) => x.id === l.itemId);
-    const sum = `${l.sizes ? l.sizes.join(' ') : 'All sizes'} · ${l.colours ? l.colours.join(' ') : 'All colours'}${Object.keys(l.qbs).length ? ' · size quantities' : ''}`;
+    const sum = `${l.sizes ? l.sizes.join(' ') : 'All sizes'} · ${l.colours ? l.colours.join(' ') : 'All colours'}${cups.length ? ' · ' + (l.cups ? 'cup ' + l.cups.join(' ') : 'all cups') : ''}${Object.keys(l.qbs).length ? ' · size quantities' : ''}`;
     return html`<tr><td><select id="bl-${i}-sec" data-bm="sec" aria-label="Section">${opts(Object.entries(SECTION_LABEL).map(([k, v]) => ({ id: k, label: v })), l.section)}</select></td>
       <td><select id="bl-${i}-item" aria-label="Material">${opts(itemsFor(l.section, l.itemId).map((x) => ({ id: x.id, label: `${x.code} · ${x.name}` })), l.itemId, 'Choose material…')}</select></td>
       <td class="r"><input id="bl-${i}-qty" class="num" inputmode="decimal" value="${l.qty}" aria-label="Quantity per piece" /> <small>${it?.stock_unit ?? ''}</small></td>
@@ -145,6 +118,7 @@ function bomTab(d: D): Raw {
       ${l.open ? html`<tr class="sub-row"><td colspan="6"><div class="grid2">
         <div><b>Sizes this line applies to</b><div class="row wrap">${sizes.map((z) => html`<label class="chk"><input type="checkbox" data-bl="${i}-sz" value="${z}" ${!l.sizes || l.sizes.includes(z) ? raw('checked') : ''} /> ${z}</label>`)}</div></div>
         <div><b>Colours this line applies to</b><div class="row wrap">${cols.map((c) => html`<label class="chk"><input type="checkbox" data-bl="${i}-co" value="${c.code}" ${!l.colours || l.colours.includes(c.code) ? raw('checked') : ''} /> ${c.code}</label>`)}</div></div></div>
+        ${cups.length ? html`<div><b>Cups this line applies to</b><div class="row wrap">${cups.map((c) => html`<label class="chk"><input type="checkbox" data-bl="${i}-cu" value="${c}" ${!l.cups || l.cups.includes(c) ? raw('checked') : ''} /> ${c}</label>`)}</div></div>` : ''}
         <b>Different quantity for some sizes</b> <small>(leave empty to use the quantity above)</small>
         <div class="row wrap">${sizes.map((z) => html`<label class="chk">${z} <input class="num" inputmode="decimal" data-bq="${i}" data-size="${z}" value="${l.qbs[z] ?? ''}" aria-label="Quantity for size ${z}" /></label>`)}</div>
         <label>Note<input id="bl-${i}-note" value="${l.note}" placeholder="e.g. cut width 150 cm" /></label></td></tr>` : ''}`;
@@ -192,7 +166,7 @@ function packsTab(d: D): Raw {
 
 // ── Requirements ──
 function planTab(d: D): Raw {
-  if (!d.sel) return html`<section class="card"><p class="empty">Make a style first.</p></section>`;
+  if (!d.sel) return html`<section class="card"><p class="empty">Add an article in Masters → Finished goods first.</p></section>`;
   const s = d.sel.style; const sizes = s.sizes as string[]; const cols = s.colours as { code: string; name: string }[];
   const bm = d.sel.boms.find((x) => x.status === 'active');
   if (!bm) return html`<div class="card">${stylePicker(d)}</div><section class="card"><p class="empty">This style has no approved BOM yet. Requirements are worked out from the BOM in use.</p></section>`;
@@ -234,7 +208,7 @@ export async function onClick(t: HTMLElement): Promise<boolean> {
     case 'bm-lopen': if (ed) ed.lines[Number(id)].open = !ed.lines[Number(id)].open; return done();
     case 'bm-save': case 'bm-submit': {
       if (!ed) return true;
-      const lines = ed.lines.map((l) => ({ section: l.section as bom.Section, itemId: l.itemId, qty: l.qty, wastagePct: l.wastage || '0', sizes: l.sizes, colours: l.colours, qtyBySize: l.qbs, note: l.note || undefined }));
+      const lines = ed.lines.map((l) => ({ section: l.section as bom.Section, itemId: l.itemId, qty: l.qty, wastagePct: l.wastage || '0', sizes: l.sizes, colours: l.colours, cups: l.cups, qtyBySize: l.qbs, note: l.note || undefined }));
       const saved = await act('BOM saved', (c) => bom.saveBomLines(c, { bomId: ed.bomId, expectedRev: ed.rev, lines, notes: ed.notes || undefined }));
       if (!saved) return true;
       if (a === 'bm-submit') { const rv = await read(async (db) => (await db.query('SELECT rev FROM bom WHERE id=$1', [ed.bomId])).rows[0].rev as number); await act('Sent for approval', (c) => bom.submitBom(c, { bomId: ed.bomId, expectedRev: rv })); }
@@ -304,4 +278,4 @@ export async function onChange(t: HTMLInputElement): Promise<boolean> {
 }
 
 /** Used by the SKUs list to open a style on this screen. */
-export function gotoStyle(id: string) { st.styleId = id; st.bomId = ''; st.tab = 'styles'; st.pickCells.clear(); st.ed = null; st.planRes = null; st.plan = {}; }
+export function gotoStyle(id: string) { st.styleId = id; st.bomId = ''; st.tab = 'bom'; st.pickCells.clear(); st.ed = null; st.planRes = null; st.plan = {}; }
