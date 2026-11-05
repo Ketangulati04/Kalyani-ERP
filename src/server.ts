@@ -13,6 +13,7 @@ import * as barcode from './domain/barcode.js';
 import * as bcs from './domain/barcodes.js';
 import * as bom from './domain/bom.js';
 import * as bulk from './domain/bulk.js';
+import * as catalog from './domain/catalog.js';
 import * as plan from './domain/planning.js';
 import * as prod from './domain/production.js';
 import { startDailyPlan } from './jobs/daily-plan.js';
@@ -222,8 +223,8 @@ export async function buildServer(pool: Pool): Promise<FastifyInstance> {
   cmd('/api/rates/:id/approve', 'rate.approve', none, (c, _b, p) => masters.approveRate(c, { rateId: p.id }));
 
   // ── products, BOMs and packs ──
-  const colour = z.object({ code: z.string(), name: z.string() });
-  const bomLine = z.object({ section: z.enum(bom.SECTIONS), itemId: id, qty: z.string(), wastagePct: z.string().optional(), sizes: z.array(z.string()).nullish(), colours: z.array(z.string()).nullish(), qtyBySize: z.record(z.string(), z.string()).optional(), note: z.string().optional() });
+  const colour = z.object({ code: z.string(), name: z.string().optional() });
+  const bomLine = z.object({ section: z.enum(bom.SECTIONS), itemId: id, qty: z.string(), wastagePct: z.string().optional(), sizes: z.array(z.string()).nullish(), colours: z.array(z.string()).nullish(), cups: z.array(z.string()).nullish(), qtyBySize: z.record(z.string(), z.string()).optional(), note: z.string().optional() });
   const rev = z.object({ expectedRev: z.number().int() });
   app.get('/api/styles', read((db, a) => bom.listStyles(db, a.id)));
   app.get('/api/styles/:id', read((db, a, r) => bom.getStyle(db, a.id, (r.params as { id: string }).id)));
@@ -232,9 +233,21 @@ export async function buildServer(pool: Pool): Promise<FastifyInstance> {
   app.get('/api/boms/:id/sku/:skuId', read((db, a, r) => { const p = r.params as { id: string; skuId: string }; return bom.skuBom(db, a.id, { bomId: p.id, skuId: p.skuId }); }));
   app.post('/api/boms/:id/requirements', read((db, a, r) => bom.requirements(db, a.id, { bomId: (r.params as { id: string }).id, plan: z.object({ plan: z.array(z.object({ skuId: id, qty: z.number().int().min(0) })).max(400) }).parse(r.body ?? {}).plan })));
   app.get('/api/packs', read((db, a) => bom.listPacks(db, a.id)));
-  cmd('/api/styles', 'style.create', z.object({ code: z.string(), name: z.string(), category: z.string().optional(), description: z.string().optional(), hsnCode: z.string().optional(), gstRate: z.string().optional(), sizes: z.array(z.string()), colours: z.array(colour) }), (c, b) => bom.createStyle(c, b), true);
-  cmd('/api/styles/:id/edit', 'style.update', z.object({ expectedVersion: ver, name: z.string().optional(), category: z.string().optional(), description: z.string().optional(), sizes: z.array(z.string()).optional(), colours: z.array(colour).optional() }), (c, b, p) => bom.updateStyle(c, { styleId: p.id, ...b }));
-  cmd('/api/styles/:id/skus', 'style.skus', z.object({ combos: z.array(z.object({ size: z.string(), colour: z.string() })).optional() }), (c, b, p) => bom.createSkus(c, { styleId: p.id, combos: b.combos }));
+  // finished-goods articles (styles) and their catalogue masters
+  const article = { brandId: id.nullish(), categoryId: id.nullish(), commodity: z.string().nullish(), cups: z.array(z.string()).optional(), packing: z.string().optional(),
+    rate: z.string().nullish(), mrp: z.string().nullish(), launchedOn: z.string().nullish(), hsnCode: z.string().optional(), gstRate: z.string().optional(), description: z.string().optional() };
+  cmd('/api/styles', 'style.create', z.object({ code: z.string(), name: z.string(), category: z.string().optional(), sizes: z.array(z.string()), colours: z.array(z.union([colour, z.string()])), ...article }), (c, b) => bom.createStyle(c, b), true);
+  cmd('/api/styles/:id/edit', 'style.update', z.object({ expectedVersion: ver, name: z.string().optional(), category: z.string().optional(), sizes: z.array(z.string()).optional(), colours: z.array(z.union([colour, z.string()])).optional(), status: z.enum(['active', 'close', 'disable']).optional(), ...article }), (c, b, p) => bom.updateStyle(c, { styleId: p.id, ...b }));
+  cmd('/api/styles/:id/skus', 'style.skus', z.object({ combos: z.array(z.object({ size: z.string(), colour: z.string(), cup: z.string().optional() })).optional() }), (c, b, p) => bom.createSkus(c, { styleId: p.id, combos: b.combos }));
+  cmd('/api/styles/:id/barcodes', 'style.barcodes', none, (c, _b, p) => catalog.fillEans(c, p.id));
+  cmd('/api/skus/:id/barcode', 'sku.barcode', z.object({ kind: z.enum(['piece', 'box']), code: z.string() }), (c, b, p) => catalog.setEan(c, { skuId: p.id, kind: b.kind, code: b.code }));
+  app.get('/api/barcodes/ean/:code', read((db, a, r) => catalog.findEan(db, a.id, (r.params as { code: string }).code)));
+  app.get('/api/catalog/options', read(async () => ({ packings: catalog.PACKINGS, commodities: catalog.COMMODITIES, cups: catalog.CUPS, statuses: catalog.ARTICLE_STATUS })));
+  for (const [path, kind] of [['brands', 'brand'], ['categories', 'category'], ['colours', 'colour']] as const) {
+    app.get(`/api/${path}`, read((db, a) => catalog.listMasters(db, a.id, kind)));
+    cmd(`/api/${path}`, `${kind}.create`, z.object({ code: z.string(), name: z.string(), hsnCode: z.string().optional(), commodity: z.string().optional(), gstRate: z.string().optional() }), (c, b) => catalog.createMaster(c, kind, b), true);
+    cmd(`/api/${path}/:id/edit`, `${kind}.update`, z.object({ expectedVersion: ver, name: z.string().optional(), hsnCode: z.string().nullish(), commodity: z.string().nullish(), gstRate: z.string().nullish(), active: z.boolean().optional() }), (c, b, p) => catalog.updateMaster(c, kind, { id: p.id, ...b }));
+  }
   cmd('/api/styles/:id/bom', 'bom.start', z.object({ copyFromBomId: id.optional() }), (c, b, p) => bom.startBom(c, { styleId: p.id, copyFromBomId: b.copyFromBomId }), true);
   cmd('/api/boms/:id/lines', 'bom.save', rev.extend({ lines: z.array(bomLine).max(200), notes: z.string().optional() }), (c, b, p) => bom.saveBomLines(c, { bomId: p.id, ...b }));
   cmd('/api/boms/:id/submit', 'bom.submit', rev, (c, b, p) => bom.submitBom(c, { bomId: p.id, expectedRev: b.expectedRev }));
@@ -245,10 +258,11 @@ export async function buildServer(pool: Pool): Promise<FastifyInstance> {
   cmd('/api/packs/:id/status', 'pack.status', z.object({ status: z.enum(['active', 'inactive']) }), (c, b, p) => bom.setPackStatus(c, { packId: p.id, status: b.status }));
 
   // ── master lists: export and import (CSV in the same columns both ways) ──
-  const headEnum = z.enum(['vendors', 'materials']);
+  const headEnum = z.enum(['vendors', 'materials', 'skus']);
   app.get('/api/export/:head', read((db, a, r) => bulk.exportCsv(db, a.id, headEnum.parse((r.params as { head: string }).head))));
   cmd('/api/import/:head', 'master.import', z.object({ csv: z.string().max(2_000_000), dryRun: z.boolean().optional() }), (c, b, p) => {
     const h = headEnum.parse(p.head);
+    if (h === 'skus') return bulk.importSkus(c, b.csv, !!b.dryRun);
     if (h === 'materials') return mdata.importMaterials(c, b.csv, !!b.dryRun, 'materials');
     return mdata.importParties(c, b.csv, !!b.dryRun, 'vendor');
   });

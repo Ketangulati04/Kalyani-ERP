@@ -6,7 +6,7 @@ purchase → receipt → quality → stock path. **Single node only** (no factor
 
 ## Run it
 
-Needs Node 20+ and PostgreSQL 16 (Docker is easiest).
+Needs Node 20+ and PostgreSQL 16 (Docker is easiest). The tests also run without PostgreSQL: leave `PG_ADMIN_URL` unset and each test file gets an in-memory PGlite database (the engine the browser demo uses).
 
 ```bash
 docker compose up -d            # PostgreSQL on :5433
@@ -15,7 +15,7 @@ npm install
 npm run migrate                 # create the schema
 npm run seed:demo               # demo company, site, roles, users (password: Demo-Passw0rd!  — dev only)
 npm start                       # API on http://localhost:3000
-npm test                        # 220 tests, each file on a fresh database
+npm test                        # 215 tests, each file on a fresh database
 ```
 
 Try it: `POST /api/login` → use the token as `Authorization: Bearer …`. **Every write needs an `Idempotency-Key`
@@ -76,15 +76,17 @@ The escalation time limits (24 h for orders, adjustments and leave; 72 h salary;
 | W03 ledger-derived balances, putaway rules (held stock can't enter an allocation pool) | ✅ |
 | W04 reservations with atomic availability (concurrent requests cannot over-commit) | ✅ (reservations only) |
 | W06 adjustments: propose → independent approve (band) → post; never type over a balance | ◐ (no count workflow) |
-| **CRM + sales**: leads → follow-ups → quotation (max 10% discount without extra right, 15-day validity) → order (banded approval, creator ≠ approver, credit-limit check) → stock hold → dispatch by storekeeper (immutable dispatch note, consumes the hold, posts the stock ledger) | ✅ (no invoice or payment yet) |
-| **Master data**: material types (what each type must record, code letters, tracking), materials with HSN / GST / reorder level and type-driven attributes (draft → independent approval, switch off only when nothing uses it), vendors and clients with GSTIN/PAN checks, contacts, billing and shipping addresses (same-as-billing, a default per type, full list of 36 states and territories), payment days, suspend/reactivate (bank or GSTIN change sends an approved party back for checking), vendor price lists, units, and all-or-nothing CSV bulk add | ✅ |
+| **Customers and sales live in the CRM app**: distributors, retailers, leads, quotations and sales orders are kept in the CRM app, not the ERP. The ERP's party screens, CSV lists, API and assistant take vendors (and job-work subcontractors) only and point customer requests to the CRM. The old sales tables stay in the database, so dispatch can be connected to the CRM later | — |
+| **Master data**: material types (what each type must record, code letters, tracking), materials with HSN / GST / reorder level and type-driven attributes (draft → independent approval, switch off only when nothing uses it), vendors with GSTIN/PAN checks, contacts, billing and shipping addresses (same-as-billing, a default per type, full list of 36 states and territories), payment days, suspend/reactivate (bank or GSTIN change sends an approved party back for checking), vendor price lists, units, and all-or-nothing CSV bulk add | ✅ |
 | **Barcode registry and label designer**: every code is a row with its own id and a unique code that is never reused (rolls, shelves, materials and staff are registered automatically; cartons, assets and spare roll labels are issued in numbered series, safe when many people issue at once). Attach a spare code to a roll, cancel a code with a reason, see what it is stuck on. Label layouts in millimetres with Code 128 and QR, drag-to-move designer, default layout per kind, sheet or label-printer output. Every print and reprint is logged (a reprint needs a reason) | ✅ |
-| **Products and BOM**: a style has sizes and colours; one SKU (a finished-goods item with its own barcode) per size and colour. Versioned BOMs: lines can apply to every size and colour or only some, change quantity by size, and add wastage; submitted by one person, approved by another (the old version retires, SKUs become ready). Cost per SKU from approved vendor prices; a requirements calculator turns pieces per SKU into materials needed against stock and open orders. **Packs**: a final box made of several SKUs plus packing materials | ✅ |
-| **Six master lists** (Vendors, Distributors, Retailers, SKUs, Materials, Finished goods): each has edit, **Add several** (a grid that runs through the same all-or-nothing checker as the import), **Import CSV** (a row with an existing code changes that record, an empty code adds one), and **Export CSV** in the same columns, so a file can be edited and loaded back. Customers are distributors or retailers (old customers become retailers) | ✅ |
+| **Finished goods (the CRM app's article master)**: an article has a code, name, **brand**, **category**, colours, **cups** (bras), sizes, **packing** (single piece, hanger pack, pouch of 2, box of 3/6/10/12), **rate and MRP per piece** (the pack's rate and MRP are worked out), HSN and **commodity type** (defaults from the category), launch date and **status** (Active · Close: sell what is left, nothing new is planned · Disable: hidden). Every colour · cup · size is a SKU with a **piece barcode** and, for packs, a **box barcode**: EAN-13 under a GS1 prefix (`EAN_PREFIX` in `src/domain/catalog.ts`, a **sample** 890 7654 until yours is set), never repeated; a label that is already printed can be scanned over the one made. **SKU and barcode CSV** exports and loads back every SKU. Starts with the CRM's 11 articles | ✅ |
+| **Brand, Category and Colour masters**: code and name, switch on/off (articles already using one keep it). A category carries the default HSN code, commodity type and GST for its articles; a renamed colour is renamed on its articles. Start with the CRM's 4 brands, 9 categories and 8 colours. Managed by the master-data steward and the engineer (`catalog.manage`) | ✅ |
+| **BOM and packs**: versioned BOMs per article: lines can apply to every size, colour and cup or only some, change quantity by size, and add wastage; submitted by one person, approved by another (the old version retires, SKUs become ready). Cost per SKU from approved vendor prices; a requirements calculator turns pieces per SKU into materials needed against stock and open orders. **Packs**: a final box made of several SKUs plus packing materials | ✅ |
+| **Master lists with CSV** (Vendors, Materials, SKUs and barcodes): each has **Add several** (a grid that runs through the same all-or-nothing checker as the import), **Import CSV** (a row with an existing code changes that record, an empty code adds one), and **Export CSV** in the same columns, so a file can be edited and loaded back | ✅ |
 | **Production plan** (six months ahead): finished pieces to make each month from average sales (or typed sales, or a figure for one month) plus a minimum stock of average sales × days of cover; materials from the approved BOM with size quantities, wastage and **cutting yield**; finished fabric made from grey fabric with the **loss in finishing**; month-by-month balance for every material against stock and open orders; shortages become **purchase requests** (one per vendor, dated by needed-by and order-by from the lead time), never asked for twice, which the buyer turns into a draft PO | ✅ |
 | **Work orders** (finishing and cutting): grey fabric goes out to your own unit or a job-work vendor and comes back as finished fabric (loss recorded) on QC hold; accepted fabric is split into shade lots; a cutting order takes BOM materials (fabric by colour and shade, divided by the cutting yield) and records the pieces actually cut. Pieces cut below plan go through QC again and the shortfall returns to the production plan. Plan counts open orders and QC-hold pieces as on the way, so nothing is planned or bought twice. | `production.*` |
 | **AI model registry** (owner/administrator only): add, edit, remove providers (Anthropic, OpenAI, Google, any OpenAI-compatible endpoint) and models, store API keys sealed with AES-GCM (only last 4 shown, never returned or audited), assign a primary and fallback model per job (assistant, reports), test a model, append-only call log | ✅ |
-| **AI assistant** with voice: floating helper that answers from the user's own permissions, opens screens, and prepares changes (leads, vendors, etc.) that only run after the user says yes (button or voice). Uses the assigned model, or a built-in reader when none is set | ✅ |
+| **AI assistant** with voice: floating helper that answers from the user's own permissions, opens screens, and prepares changes (vendors, materials, approvals) that only run after the user says yes (button or voice). Uses the assigned model, or a built-in reader when none is set | ✅ |
 | REST API + validation, clean errors, reads filtered by site scope | ✅ |
 
 The blueprint's own worked example (p.55: 500 m → 480 accepted / 20 rejected → reserve 120 → 360 left) and the
@@ -95,7 +97,7 @@ are automated in `test/`.
 
 Gate-in/out scanning, scanning for issue to production (needs F01–F08), cycle counts by scan, inter-site transfers (W05) ·
 P01 planning · P03 vendor portal · W05 transfers · W07 split/slit · W08 supplier return/debit · W09 dead stock ·
-J01–J03 subcontracting · F01–F08 production · S-series invoicing, returns and receipts · sales orders are not yet in the owner-desk escalation or override · A01–A04 finance/GST/e-invoice/e-way bill ·
+J01–J03 subcontracting · F01–F08 production · S-series invoicing, returns and receipts · A01–A04 finance/GST/e-invoice/e-way bill ·
 recruitment/appraisal/loans, maintenance, scheduled or emailed reports, PDF/Excel export (CSV only), finance reports (need A01–A04) · **offline factory node + cloud sync** (the outbox and idempotency are the
 foundation for it) · data migration tooling. (The browser demo is a prototype interface; a production front end is not built.)
 

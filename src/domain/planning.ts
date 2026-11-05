@@ -55,8 +55,9 @@ export async function computePlan(db: Db, userId: string) {
 
   // ── finished pieces: how many to make each month ──
   const skuRows = (await db.query(
-    `SELECT k.id AS sku_id, k.code, k.size, k.colour_code, k.style_id, s.code AS style, s.cutting_yield_pct::float AS yield, i.id AS item_id, b.version AS bom_version
-       FROM sku k JOIN product_style s ON s.id=k.style_id JOIN item i ON i.id=k.item_id JOIN bom b ON b.style_id=s.id AND b.status='active' ORDER BY k.code`)).rows;
+    `SELECT k.id AS sku_id, k.code, k.size, k.colour_code, k.cup, k.style_id, s.code AS style, s.cutting_yield_pct::float AS yield, i.id AS item_id, b.version AS bom_version
+       FROM sku k JOIN product_style s ON s.id=k.style_id JOIN item i ON i.id=k.item_id JOIN bom b ON b.style_id=s.id AND b.status='active'
+      WHERE s.status = 'active' ORDER BY k.code`)).rows; // closed and disabled articles are not planned or made
   const bomLines = (await db.query(`SELECT l.*, b.style_id FROM bom_line l JOIN bom b ON b.id=l.bom_id WHERE b.status='active'`)).rows;
   const byStyle = new Map<string, typeof bomLines>(); for (const l of bomLines) byStyle.set(l.style_id, [...(byStyle.get(l.style_id) ?? []), l]);
   const need = new Map<string, number[]>(); const addNeed = (id: string, m: number, q: number) => { const a = need.get(id) ?? Array(months.length).fill(0); a[m] += q; need.set(id, a); };
@@ -72,7 +73,7 @@ export async function computePlan(db: Db, userId: string) {
       const production = Math.ceil(Math.max(0, demand + min - open) - 1e-9);
       const closing = open + production - demand;
       const row = { month: m, demand: r4(demand), opening: r4(open), production, closing: r4(closing) }; open = closing;
-      if (production > 0) for (const l of byStyle.get(k.style_id) ?? []) if (applies(l, k.size, k.colour_code)) {
+      if (production > 0) for (const l of byStyle.get(k.style_id) ?? []) if (applies(l, k.size, k.colour_code, k.cup)) {
         const g = lineQty(l, k.size).gross; addNeed(l.item_id, mi, (l.section === 'FABRIC' ? g / (k.yield / 100) : g) * production);
       }
       return row;

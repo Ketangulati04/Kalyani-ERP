@@ -168,10 +168,10 @@ type Need = { key: string; itemId: string; code: string; name: string; unit: str
 export async function cutNeeds(db: Db, woId: string): Promise<Need[]> {
   const w = (await db.query('SELECT * FROM work_order WHERE id=$1', [woId])).rows[0]; if (!w) throw notFound('Work order');
   const st = (await db.query('SELECT cutting_yield_pct::float AS y FROM product_style WHERE id=$1', [w.style_id])).rows[0];
-  const lines = (await db.query(`SELECT l.*, k.size, k.colour_code FROM work_order_line l JOIN sku k ON k.id=l.sku_id WHERE l.wo_id=$1 AND l.role='sku' ORDER BY l.line_no`, [woId])).rows;
+  const lines = (await db.query(`SELECT l.*, k.size, k.colour_code, k.cup FROM work_order_line l JOIN sku k ON k.id=l.sku_id WHERE l.wo_id=$1 AND l.role='sku' ORDER BY l.line_no`, [woId])).rows;
   const bomLines = (await db.query(`SELECT bl.*, i.code, i.name FROM bom_line bl JOIN bom b ON b.id=bl.bom_id JOIN item i ON i.id=bl.item_id WHERE b.style_id=$1 AND b.status='active'`, [w.style_id])).rows;
   const need = new Map<string, Need>();
-  for (const l of lines) for (const b of bomLines) if (applies(b, l.size, l.colour_code)) {
+  for (const l of lines) for (const b of bomLines) if (applies(b, l.size, l.colour_code, l.cup)) {
     const g = lineQty(b, l.size).gross; const per = b.section === 'FABRIC' ? g / (st.y / 100) : g;
     const colour = b.section === 'FABRIC' ? (l.colour_code as string) : null; const key = `${b.item_id}|${colour ?? ''}`;
     const e = need.get(key) ?? { key, itemId: b.item_id, code: b.code, name: b.name, unit: b.unit, colour, qty: 0 }; e.qty += per * Number(l.planned_qty); need.set(key, e);

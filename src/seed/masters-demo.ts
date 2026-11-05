@@ -2,6 +2,7 @@ import type { World } from './demo.js';
 import * as masters from '../domain/masters.js';
 import * as md from '../domain/master-data.js';
 import * as bom from '../domain/bom.js';
+import { seedArticles } from './catalog-demo.js';
 
 const A = md.parseAttrs;
 export const TYPES: { code: string; name: string; kind: string; unit: string; tracking: string; prefix: string; attrs: string }[] = [
@@ -44,7 +45,6 @@ export async function seedMastersDemo(w: World) {
   const cup = await mat('CUP', 'Moulded cup B', { hsnCode: '6212', gstRate: '12', reorderLevel: '2000', attributes: { cupSize: 'B', moulding: 'Seamless' } });
   const lbl = await mat('LABEL', 'Woven brand label', { hsnCode: '5807', gstRate: '12', reorderLevel: '10000' });
   const ctn = await mat('CARTON', 'Export carton 60x40x40', { hsnCode: '4819', gstRate: '12', reorderLevel: '200', attributes: { size: '60x40x40 cm' } });
-  await mat('GARMENT', 'Basic tee, white, M', { hsnCode: '6109', gstRate: '5', attributes: { size: 'M', colour: 'White' } });
   await mat('KNIT', 'Single jersey 150 GSM, navy', { hsnCode: '6006', gstRate: '5', attributes: { width: 160, gsm: 150 } }, false); // still a draft
 
   const wbox = await mat('CARTON', 'Retail box 3-pack', { hsnCode: '4819', gstRate: '12', reorderLevel: '300', attributes: { size: '22x16x6 cm' } });
@@ -77,8 +77,10 @@ export async function seedMastersDemo(w: World) {
   await rate(v3, cup, '9.5000');
   await rate(v1, rib, '165.0000'); await rate(v2, picot, '3.1000'); await rate(v1, thr, '950.0000'); await rate(v2, lbl, '0.6000');
 
-  // A style with sizes and colours, its SKUs, an approved BOM and a 3-pack box.
-  const st = await w.as('md', (c) => bom.createStyle(c, { code: 'BRF-01', name: 'Classic brief', category: 'Innerwear', hsnCode: '6107', gstRate: '5', sizes: ['S', 'M', 'L', 'XL'], colours: [{ code: 'BLK', name: 'Black' }, { code: 'WHT', name: 'White' }, { code: 'NVY', name: 'Navy' }] }));
+  // An article with sizes and colours, its SKUs, an approved BOM and a 3-pack box. The BOM, planning and production demos use it.
+  const id = async (t: string, code: string) => (await w.pool.query(`SELECT id FROM ${t} WHERE code=$1`, [code])).rows[0].id as string;
+  const kly = await id('brand', 'KLY'), brief = await id('product_category', 'BRIEF'); // read before the command: it holds the connection
+  const st = await w.as('md', (c) => bom.createStyle(c, { code: 'BRF-01', name: 'Rib brief', brandId: kly, categoryId: brief, packing: 'Single piece', rate: '68.00', mrp: '125.00', hsnCode: '6107', gstRate: '5', sizes: ['S', 'M', 'L', 'XL'], colours: [{ code: 'BLK', name: 'Black' }, { code: 'WHT', name: 'White' }, { code: 'NVY', name: 'Navy' }] }));
   await w.as('md', (c) => bom.createSkus(c, { styleId: st.id }));
   const b = await w.as('md', (c) => bom.startBom(c, { styleId: st.id }));
   const saved = await w.as('md', (c) => bom.saveBomLines(c, { bomId: b.id, expectedRev: b.rev, notes: 'First costed BOM', lines: [
@@ -91,6 +93,8 @@ export async function seedMastersDemo(w: World) {
   const sub = (await w.pool.query('SELECT rev FROM bom WHERE id=$1', [b.id])).rows[0].rev;
   await w.as('eng', (c) => bom.approveBom(c, { bomId: b.id, expectedRev: sub }));
   const sk = Object.fromEntries((await w.pool.query('SELECT code, id FROM sku WHERE style_id=$1', [st.id])).rows.map((x) => [x.code, x.id]));
-  await w.as('md', (c) => bom.createPack(c, { code: 'BRF-01-3PK-M', name: 'Classic brief 3-pack, size M (black, white, navy)', skus: [{ skuId: sk['BRF-01-BLK-M'], qty: 1 }, { skuId: sk['BRF-01-WHT-M'], qty: 1 }, { skuId: sk['BRF-01-NVY-M'], qty: 1 }], materials: [{ itemId: wbox, qty: '1' }] }));
+  await w.as('md', (c) => bom.createPack(c, { code: 'BRF-01-3PK-M', name: 'Rib brief 3-pack, size M (black, white, navy)', skus: [{ skuId: sk['BRF-01-BLK-M'], qty: 1 }, { skuId: sk['BRF-01-WHT-M'], qty: 1 }, { skuId: sk['BRF-01-NVY-M'], qty: 1 }], materials: [{ itemId: wbox, qty: '1' }] }));
 
+  // The CRM app's articles, so the Finished goods master starts with the same products as the CRM.
+  await seedArticles(w);
 }

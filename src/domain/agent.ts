@@ -68,6 +68,7 @@ const SCREENS: Record<string, [string, string[]]> = {
   overview: ['overview', ['home', 'dashboard', 'overview']], po: ['po', ['purchase order', 'purchase orders', 'purchasing', 'po', 'pos']], receiving: ['receiving', ['receiving', 'gate', 'goods receipt']],
   quality: ['quality', ['quality', 'qc', 'inspection']], stock: ['stock', ['stock', 'inventory']], barcodes: ['barcodes', ['barcode', 'barcodes', 'scan', 'labels']],
   materials: ['materials', ['materials', 'material', 'items', 'fabrics']], mtypes: ['mtypes', ['material types', 'types', 'units']], vendors: ['vendors', ['vendors', 'vendor', 'suppliers']],
+  finished: ['finished', ['finished goods', 'articles', 'article', 'products', 'skus']], brands: ['brands', ['brands', 'brand']], categories: ['categories', ['categories', 'category']], colours: ['colours', ['colours', 'colors', 'colour', 'color']], products: ['products', ['bom', 'boms', 'bill of materials', 'packs']],
   reports: ['reports', ['reports', 'report']], employees: ['employees', ['employees', 'staff', 'people']], attendance: ['attendance', ['attendance']], leave: ['leave', ['leave', 'leaves']], payroll: ['payroll', ['payroll', 'salary']],
   owner: ['owner', ['owner desk', 'owner']], escalations: ['escalations', ['urgent approvals', 'escalations']], users: ['users', ['users']], aimodels: ['aimodels', ['ai models', 'ai']],
 };
@@ -76,6 +77,7 @@ const HOWTO: Record<string, string> = {
   receive: 'Open Receiving, pick the purchase order line and enter the challan and quantity. The roll goes on quality hold until it is inspected. It cannot be used before that.',
   quality: 'Open Quality, pick the inspection, record what you found, then the quality manager accepts or rejects. Only accepted stock can be reserved or sold.',
   customers: 'Distributors, retailers, leads, quotations and sales orders are kept in the CRM app. The ERP keeps vendors, materials, finished goods, buying, stock, production and people.',
+  'finished goods': 'Open Masters → Finished goods and press New article. Pick the brand, category, colours, cups (for bras) and sizes, the packing, and the rate and MRP per piece. Saving makes a SKU for every colour, cup and size, each with its own piece barcode (and box barcode for packs). Brands, categories and colours have their own master screens.',
   vendor: 'Open Vendors, press New vendor, fill in GSTIN and bank details, and send it for checking. Finance verifies the bank account and commercial approves it. After that it can be used on orders.',
   material: 'Open Materials, press New material and pick its type first. The form then asks for what that type needs. Someone else approves it before it can be bought or sold.',
   report: 'Open Reports. Ask in plain words, such as "total purchases by vendor last 90 days", or pick a ready-made report. I can run that for you too.',
@@ -129,7 +131,7 @@ const TOOLS: Tool[] = [
       return hit ? { text: `Opening ${hit[1][1][0]}.`, view: hit[1][0] } : { text: `I do not know a screen called "${a.screen}".` };
     } },
   { name: 'how_to', description: 'Explain how to do something in the system', params: { topic: { type: 'string', required: true, desc: 'e.g. purchase order, receive material, add a vendor' } },
-    run: async (_d, _u, a) => { const t = a.topic.toLowerCase(); const k = Object.keys(HOWTO).find((x) => t.includes(x)) ?? (t.includes('receiv') ? 'receive' : t.includes('inspect') ? 'quality' : undefined); return { text: k ? HOWTO[k] : 'I can explain: ' + Object.keys(HOWTO).join(', ') + '. Ask "how do I …" for any of these.' }; } },
+    run: async (_d, _u, a) => { const t = a.topic.toLowerCase(); const k = Object.keys(HOWTO).find((x) => t.includes(x)) ?? (t.includes('receiv') ? 'receive' : t.includes('inspect') ? 'quality' : /article|sku|brand|colou?r|categor/.test(t) ? 'finished goods' : undefined); return { text: k ? HOWTO[k] : 'I can explain: ' + Object.keys(HOWTO).join(', ') + '. Ask "how do I …" for any of these.' }; } },
 
   // ─── things that change data: proposals only ───
   { name: 'create_party', description: 'Add a vendor (it still needs checking and approval by others)', write: true, perms: ['partner.create'], params: { name: { type: 'string', required: true, desc: '' }, gstin: { type: 'string', desc: '' }, city: { type: 'string', desc: '' }, phone: { type: 'string', desc: '' } },

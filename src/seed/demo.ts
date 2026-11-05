@@ -9,6 +9,7 @@ import * as masters from '../domain/masters.js';
 import { seedHrBase, seedHrRecent } from './hr-demo.js';
 import { seedOwnerBase, seedOwnerFloor } from './owner-demo.js';
 import { seedMastersDemo } from './masters-demo.js';
+import { seedCatalog } from './catalog-demo.js';
 import { seedPlanningDemo } from './planning-demo.js';
 import { seedAiDemo } from './ai-demo.js';
 
@@ -99,6 +100,7 @@ export async function buildWorld(pool: Pool, password = 'Demo-Passw0rd!', opts: 
 
   const rate = await as('buy', (c) => masters.proposeRate(c, { partnerId: v.id, itemId: fab.id, rate: '250.0000', effectiveFrom: '2026-01-01' }));
   await as('com', (c) => masters.approveRate(c, { rateId: rate.id }));
+  await seedCatalog(world);
   await seedHrBase(world, password);
   await seedOwnerBase(world);
   if (opts.recent !== false) await seedHrRecent(world);

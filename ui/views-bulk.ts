@@ -1,4 +1,4 @@
-// Shared tools for every master list: add several at once, import a CSV, export a CSV. Plus the SKUs list.
+// Shared tools for every master list: add several at once, import a CSV, export a CSV.
 import { html, raw, chip, type Raw } from './lib.js';
 import { K, S, uid, read, val, head, denied, R, opts, toast } from './ctx.js';
 import * as md from '../src/domain/master-data.js';
@@ -13,7 +13,7 @@ const st = {
   panel: null as null | { head: bulk.Head; mode: Mode }, rows: [] as string[][], text: '', res: null as Res | null, exp: null as null | { csv: string; rows: number; file: string },
   sku: { q: '', style: '', status: '' },
 };
-const LABEL: Record<bulk.Head, string> = { vendors: 'vendors', materials: 'materials', finished: 'finished goods', skus: 'SKUs' };
+const LABEL: Record<bulk.Head, string> = { vendors: 'vendors', materials: 'materials', skus: 'SKUs and barcodes' };
 const cols = (h: bulk.Head) => bulk.HEADS[h].header.split(',').filter((c) => c !== 'code'); // the add-several grid never asks for a code
 const HINT: Record<string, string> = {
   name: 'Name', gstin: '29ABCDE1234F1Z5', pan: 'ABCDE1234F', city: 'City', state: 'State', phone: 'Phone', email: 'Email', payment_days: 'Days', contact_name: 'Contact', contact_phone: 'Contact phone',
@@ -62,7 +62,7 @@ function panel(h: bulk.Head, mode: Mode, canAdd: boolean): Raw {
 const reset = () => { st.rows = []; st.text = ''; st.res = null; st.exp = null; };
 async function run(h: bulk.Head, csv: string, dry: boolean) {
   try {
-    const r = await K.world.as(S.user, (c) => (h === 'skus' ? bulk.importSkus(c, csv, dry) : h === 'materials' || h === 'finished' ? md.importMaterials(c, csv, dry, h === 'finished' ? 'fg' : 'materials') : md.importParties(c, csv, dry, 'vendor'))) as Res;
+    const r = await K.world.as(S.user, (c) => (h === 'skus' ? bulk.importSkus(c, csv, dry) : h === 'materials' ? md.importMaterials(c, csv, dry, 'materials') : md.importParties(c, csv, dry, 'vendor'))) as Res;
     st.res = r;
     if (!dry && !r.errors.length) { toast(`${LABEL[h]}: ${[r.created && r.created + ' added', r.updated && r.updated + ' changed'].filter(Boolean).join(', ') || 'no changes'}`); st.rows = blankRows(h); st.text = ''; }
   } catch (e) { toast((e as Error).message, 'bad'); }
@@ -117,35 +117,11 @@ export async function onSubmit(form: string, _f?: HTMLElement, ev?: SubmitEvent)
 }
 export async function onChange(t: HTMLInputElement): Promise<boolean> {
   if (t.id === 'bk-file' && t.files?.[0]) { const f = t.files[0]; if (f.size > 2_000_000) { toast('That file is over 2 MB. Split it into smaller files', 'bad'); return true; } st.text = await f.text(); st.res = null; await R.render(); return true; }
-  if (t.id === 'sk-style') { st.sku.style = t.value; await R.render(); return true; }
-  if (t.id === 'sk-status') { st.sku.status = t.value; await R.render(); return true; }
   return false;
 }
 export async function onInput(t: HTMLInputElement): Promise<boolean> {
-  if (t.id !== 'sk-q') return false;
+  if (t.id !== 'sk-q') return false; // the old SKU list's search box; the SKUs are now shown on the Finished goods screen
   st.sku.q = t.value; await R.render(); const el = document.getElementById('sk-q') as HTMLInputElement | null; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } return true;
 }
 
-// ───────────── SKUs list ─────────────
-export async function skusView(): Promise<Raw> {
-  const d = await read(async (db) => {
-    if (!(await can(db, uid(), 'bom.view', ANY))) return null;
-    const rows = (await db.query(
-      `SELECT k.id, k.code, k.size, k.colour_code, s.id AS style_id, s.code AS style, s.name AS style_name, i.status AS item_status, i.name,
-              (SELECT b.version FROM bom b WHERE b.style_id=s.id AND b.status='active') AS bom_version,
-              COALESCE((SELECT sum(qty) FROM stock_ledger l WHERE l.item_id=i.id AND l.status='ACCEPTED'),0)::text AS on_hand
-         FROM sku k JOIN product_style s ON s.id=k.style_id JOIN item i ON i.id=k.item_id ORDER BY k.code`)).rows as { id: string; code: string; size: string; colour_code: string; style_id: string; style: string; style_name: string; item_status: string; name: string; bom_version: number | null; on_hand: string }[];
-    const styles = (await db.query('SELECT id, code, name FROM product_style ORDER BY code')).rows as { id: string; code: string; name: string }[];
-    return { rows, styles, create: await can(db, uid(), 'bom.create', ANY) };
-  });
-  if (!d) return denied('SKUs', 'One stock item for every size and colour of a style.', 'Your role cannot see SKUs.');
-  const q = st.sku.q.toLowerCase();
-  const list = d.rows.filter((r) => (!st.sku.style || r.style_id === st.sku.style) && (!st.sku.status || (st.sku.status === 'ready' ? r.item_status === 'active' : r.item_status !== 'active')) && (!q || r.code.toLowerCase().includes(q) || r.colour_code.toLowerCase().includes(q)));
-  const ready = d.rows.filter((r) => r.item_status === 'active').length;
-  return html`${head('SKUs', 'One stock item for every size and colour of a style, each with its own barcode. A SKU is ready once its style has an approved BOM.', d.create ? html`<button class="primary" data-act="bk-gostyle" data-id="${d.styles[0]?.id ?? ''}">New style or SKUs by grid</button>` : undefined)}
-  <section class="card crm-sum"><div class="crm-k"><span>SKUs</span><b>${d.rows.length}</b></div><div class="crm-k"><span>Styles</span><b>${d.styles.length}</b></div><div class="crm-k"><span>Ready</span><b>${ready}</b></div><div class="crm-k"><span>Waiting for a BOM</span><b class="${d.rows.length - ready ? 'warn-t' : ''}">${d.rows.length - ready}</b></div></section>
-  ${bulkBar('skus', d.create)}
-  <section class="card"><div class="row"><input id="sk-q" type="search" placeholder="Search SKU code or colour" value="${st.sku.q}" style="flex:1;min-width:140px" /><select id="sk-style" aria-label="Style">${opts(d.styles.map((s) => ({ id: s.id, label: `${s.code} · ${s.name}` })), st.sku.style, 'Every style')}</select><select id="sk-status" aria-label="Status">${opts([{ id: 'ready', label: 'Ready' }, { id: 'waiting', label: 'Waiting for a BOM' }], st.sku.status, 'Any status')}</select></div>
-    ${list.length ? html`<div class="scroll"><table class="mini"><thead><tr><th>SKU</th><th>Style</th><th>Size</th><th>Colour</th><th class="r">In stock</th><th>BOM</th><th>Status</th><th></th></tr></thead><tbody>${list.slice(0, 300).map((r) => html`<tr><td class="mono">${r.code}</td><td>${r.style_name}</td><td>${r.size}</td><td>${r.colour_code}</td><td class="r">${Number(r.on_hand).toLocaleString('en-IN')}</td><td>${r.bom_version ? `v${r.bom_version}` : '–'}</td><td>${chip(r.item_status === 'active' ? 'active' : 'draft', r.item_status === 'active' ? 'ready' : 'waiting')}</td><td>${d.create ? html`<button class="link" data-act="bk-gostyle" data-id="${r.style_id}">edit style</button>` : ''}</td></tr>`)}</tbody></table></div>${list.length > 300 ? html`<p class="note">Showing the first 300 of ${list.length}. Narrow the search.</p>` : ''}` : html`<p class="empty">No SKUs match.</p>`}</section>`;
-}
 void uid;

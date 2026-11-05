@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 
@@ -16,7 +16,9 @@ const shim = {
     to(/(^|\/)migrate(\.js)?$/, 'ui/shims/migrate.ts');
   },
 };
-const sig = createHash('sha1').update(readFileSync(resolve(root, 'src/db/migrations/001_init.sql'))).update(readFileSync(resolve(root, 'src/db/migrations/002_admin_hr.sql'))).update(readFileSync(resolve(root, 'src/seed/hr-demo.ts'))).update(readFileSync(resolve(root, 'src/seed/demo.ts'))).update(readFileSync(resolve(root, 'src/seed/rbac.ts'))).update(readFileSync(resolve(root, 'src/db/migrations/003_preferences.sql'))).update(readFileSync(resolve(root, 'src/db/migrations/004_owner_escalation.sql'))).update(readFileSync(resolve(root, 'src/seed/owner-demo.ts'))).update(readFileSync(resolve(root, 'src/db/migrations/005_custom_reports.sql'))).update(readFileSync(resolve(root, 'src/db/migrations/006_crm_sales.sql'))).update(readFileSync(resolve(root, 'src/seed/sales-demo.ts'))).update(readFileSync(resolve(root, 'src/db/migrations/007_masters.sql'))).update(readFileSync(resolve(root, 'src/seed/masters-demo.ts'))).update(readFileSync(resolve(root, 'src/db/migrations/008_ai_models.sql'))).update(readFileSync(resolve(root, 'src/seed/ai-demo.ts'))).update(readFileSync(resolve(root, 'src/db/migrations/009_addresses.sql'))).update(readFileSync(resolve(root, 'src/db/migrations/010_barcodes.sql'))).update(readFileSync(resolve(root, 'src/db/migrations/011_bom.sql'))).update(readFileSync(resolve(root, 'src/db/migrations/012_party_types.sql'))).update(readFileSync(resolve(root, 'src/db/migrations/013_planning.sql'))).update(readFileSync(resolve(root, 'src/db/migrations/014_production.sql'))).update(readFileSync(resolve(root, 'src/seed/planning-demo.ts'))).update('v15').digest('hex').slice(0, 8);
+// The build id (and so the browser's demo database name) changes whenever a migration or a seed changes, so visitors get a fresh demo.
+const sigFiles = ['src/db/migrations', 'src/seed'].flatMap((d) => readdirSync(resolve(root, d)).filter((f) => /\.(sql|ts)$/.test(f)).sort().map((f) => resolve(root, d, f)));
+const sig = sigFiles.reduce((h, f) => h.update(readFileSync(f)), createHash('sha1')).digest('hex').slice(0, 12);
 await build({
   entryPoints: [resolve(root, 'ui/main.ts')],
   outfile: resolve(out, 'app.js'),

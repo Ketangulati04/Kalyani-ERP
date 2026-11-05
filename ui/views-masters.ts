@@ -39,7 +39,6 @@ function importBox(kind: 'materials' | 'parties', sample: string, header: string
 
 // ───────────────────────── Materials ─────────────────────────
 export const materialsView = () => itemsView('materials');
-export const finishedView = () => itemsView('finished');
 async function itemsView(mode: 'materials' | 'finished'): Promise<Raw> {
   const FGM = mode === 'finished'; const keep = (k: string) => (k === 'FG') === FGM;
   const d = await read(async (db) => {
@@ -61,7 +60,7 @@ async function itemsView(mode: 'materials' | 'finished'): Promise<Raw> {
   const mine = it && it.created_by === uid();
   const fld = (a: md.AttrDef, cur: unknown, p: string) => html`<label>${a.label}${a.unit ? html` <small>(${a.unit})</small>` : ''}${a.required ? html` <small>required</small>` : ''}<input id="${p}${a.key}" ${a.type === 'number' ? raw('inputmode="decimal"') : ''} value="${cur ?? ''}" /></label>`;
   return html`${head(FGM ? 'Finished goods' : 'Materials', FGM ? 'What you sell: garments made from styles, boxed packs, and anything else you stock for sale.' : 'Everything you buy or make for production. Each belongs to a type, so nothing is described twice.', d.create ? html`<button class="primary" data-act="mat-new">${FGM ? 'New finished good' : 'New material'}</button>` : undefined)}
-  ${bulkBar(FGM ? 'finished' : 'materials', d.create)}
+  ${bulkBar('materials', d.create)}
   <section class="card crm-sum"><div class="crm-k"><span>${FGM ? 'Finished goods' : 'Materials'}</span><b>${d.all.length}</b></div><div class="crm-k"><span>In use</span><b>${d.all.filter((m) => m.status === 'active').length}</b></div>
     <div class="crm-k"><span>Waiting for approval</span><b class="${waiting.length ? 'warn-t' : ''}">${waiting.length}</b></div><div class="crm-k"><span>Below reorder level</span><b class="${low.length ? 'bad-t' : ''}">${low.length}</b></div></section>
   ${byType.length ? html`<section class="card"><h2>By type</h2><div class="tbars">${byType.map((t) => html`<button class="tbar ${st.matType === t.id ? 'on' : ''}" data-act="mat-typefilter" data-id="${t.id}" title="Show only ${t.name}"><span>${t.name}</span><i style="width:${Math.max(4, (t.items / maxN) * 100)}%"></i><b>${t.items}</b></button>`)}</div></section>` : ''}

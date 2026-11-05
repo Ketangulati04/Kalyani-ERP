@@ -11,7 +11,7 @@ export const DEMO_PASSWORD = 'Demo-Passw0rd!';
 export type View =
   | 'overview' | 'po' | 'receiving' | 'quality' | 'stock'
   | 'employees' | 'attendance' | 'leave' | 'payroll'
-  | 'users' | 'roles' | 'audit' | 'signins' | 'account' | 'owner' | 'escalations' | 'reports' | 'barcodes' | 'materials' | 'mtypes' | 'vendors' | 'finished' | 'skus' | 'aimodels' | 'products' | 'planning' | 'work';
+  | 'users' | 'roles' | 'audit' | 'signins' | 'account' | 'owner' | 'escalations' | 'reports' | 'barcodes' | 'materials' | 'mtypes' | 'vendors' | 'finished' | 'brands' | 'categories' | 'colours' | 'aimodels' | 'products' | 'planning' | 'work';
 
 export const K = { world: null as unknown as World, pool: null as unknown as LitePool };
 export const R = { render: async () => {}, scheduleRender: () => {} };
