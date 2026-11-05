@@ -27,8 +27,11 @@ async function accepted(itemId: string, qty: string): Promise<string> {
 }
 async function passQc(insp: string, qty: string, lot?: string): Promise<string> {
   await w.as('qci', (c) => qc.startInspection(c, { inspectionId: insp }));
-  await w.as('qci', async (c) => qc.submitInspection(c, { inspectionId: insp, expectedVersion: await ver('qc_inspection', insp), inspectedQty: qty, recommendAccept: qty, recommendReject: '0' }));
-  await w.as('qcm', async (c) => qc.dispositionInspection(c, { inspectionId: insp, expectedVersion: await ver('qc_inspection', insp), acceptQty: qty, rejectQty: '0' }));
+  // read versions before the command: inside it the command holds the connection (PGlite has only one)
+  const v1 = await ver('qc_inspection', insp);
+  await w.as('qci', (c) => qc.submitInspection(c, { inspectionId: insp, expectedVersion: v1, inspectedQty: qty, recommendAccept: qty, recommendReject: '0' }));
+  const v2 = await ver('qc_inspection', insp);
+  await w.as('qcm', (c) => qc.dispositionInspection(c, { inspectionId: insp, expectedVersion: v2, acceptQty: qty, rejectQty: '0' }));
   return lot ?? (await w.pool.query('SELECT lot_id FROM qc_inspection WHERE id=$1', [insp])).rows[0].lot_id;
 }
 const acc = async (lot: string) => Number((await availability(w.pool, lot)).available);
