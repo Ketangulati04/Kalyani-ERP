@@ -16,6 +16,8 @@ export const PACKINGS: { name: string; pcs: number }[] = [
 export const packPcs = (packing: string) => PACKINGS.find((p) => p.name === packing)?.pcs ?? 1;
 export const COMMODITIES = ['Knitted garment', 'Woven garment', 'Brassiere & shapewear', 'Hosiery', 'Accessory'] as const;
 export const CUPS = ['A', 'B', 'C', 'D', 'DD', 'E', 'F'] as const;
+/** The standard sizes, in order (the CRM app's list). An article can also have other sizes. */
+export const SIZES = ['28/XS', '30/S', '32/M', '34/L', '36/XL', '38/2XL', '40/3XL', '42/4XL', '44/5XL', '46', '48', '50', '52'] as const;
 /** Article status, as in the CRM app. */
 export const ARTICLE_STATUS: Record<string, string> = {
   active: 'Sold and produced',
@@ -121,12 +123,12 @@ async function nextEan(db: Db) {
   throw invalidState('Could not find a free EAN code');
 }
 
-/** Give every SKU of an article that has no piece barcode one, and a box barcode too when the packing holds more than one piece. */
+/** Give every SKU of an article that is missing one a piece barcode and a box barcode (the box or pack the piece is sold in). */
 export async function fillEans(ctx: Ctx, styleId: string) {
   await assertCan(ctx.db, ctx.actor.id, 'bom.create', ANY);
-  const s = (await ctx.db.query('SELECT id, code, pcs_per_pack FROM product_style WHERE id=$1', [styleId])).rows[0];
+  const s = (await ctx.db.query('SELECT id, code FROM product_style WHERE id=$1', [styleId])).rows[0];
   if (!s) throw notFound('Article');
-  const kinds = s.pcs_per_pack > 1 ? ['piece', 'box'] : ['piece'];
+  const kinds = ['piece', 'box'];
   const missing = (await ctx.db.query(
     `SELECT k.id, kd.kind FROM sku k CROSS JOIN unnest($2::text[]) AS kd(kind)
       WHERE k.style_id=$1 AND NOT EXISTS (SELECT 1 FROM sku_ean e WHERE e.sku_id=k.id AND e.kind=kd.kind) ORDER BY k.code, kd.kind DESC`, [s.id, kinds])).rows;
@@ -143,7 +145,6 @@ export async function setEan(ctx: Ctx, i: { skuId: string; kind: 'piece' | 'box'
   if (!isEan13(code)) throw badRequest(`"${code}" is not a valid EAN-13 barcode (13 digits with a correct check digit)`);
   const k = (await ctx.db.query('SELECT k.id, k.code, s.pcs_per_pack FROM sku k JOIN product_style s ON s.id=k.style_id WHERE k.id=$1', [i.skuId])).rows[0];
   if (!k) throw notFound('SKU');
-  if (i.kind === 'box' && k.pcs_per_pack <= 1) throw badRequest('This article is packed one piece at a time, so it has no box barcode');
   const other = (await ctx.db.query('SELECT e.kind, k.code FROM sku_ean e JOIN sku k ON k.id=e.sku_id WHERE e.code=$1', [code])).rows[0];
   if (other) throw badRequest(`${code} is already the ${other.kind} barcode of ${other.code}`);
   const before = (await ctx.db.query('SELECT code FROM sku_ean WHERE sku_id=$1 AND kind=$2', [k.id, i.kind])).rows[0]?.code ?? null;

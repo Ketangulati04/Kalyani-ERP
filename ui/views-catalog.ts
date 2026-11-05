@@ -64,10 +64,10 @@ export async function finishedView(): Promise<Raw> {
   const list = d.list.filter((x) => (!f.brand || x.brand_id === f.brand) && (!f.cat || x.category_id === f.cat) && (!f.status || x.status === f.status)
     && (!q || x.code.toLowerCase().includes(q) || x.name.toLowerCase().includes(q) || (x.colours as { name: string }[]).some((c) => c.name.toLowerCase().includes(q))));
   const n = (s: string) => d.list.filter((x) => x.status === s).length;
-  const skus = d.list.reduce((a, x) => a + x.n_skus, 0); const bcs = d.list.reduce((a, x) => a + x.n_piece_bc, 0);
+  const skus = d.list.reduce((a, x) => a + x.n_skus, 0); const bcs = d.list.reduce((a, x) => a + Math.min(x.n_piece_bc, x.n_box_bc), 0);
   const tiles = html`<section class="card crm-sum"><div class="crm-k"><span>Articles</span><b>${d.list.length}</b></div><div class="crm-k"><span>Active</span><b>${n('active')}</b></div>
     <div class="crm-k"><span>Close</span><b class="${n('close') ? 'warn-t' : ''}">${n('close')}</b></div><div class="crm-k"><span>Disable</span><b class="${n('disable') ? 'bad-t' : ''}">${n('disable')}</b></div>
-    <div class="crm-k"><span>SKUs</span><b>${skus}</b></div><div class="crm-k"><span>Piece barcodes</span><b class="${bcs < skus ? 'warn-t' : ''}">${bcs} / ${skus}</b></div></section>`;
+    <div class="crm-k"><span>SKUs</span><b>${skus}</b></div><div class="crm-k"><span>SKUs with barcodes</span><b class="${bcs < skus ? 'warn-t' : ''}">${bcs} / ${skus}</b></div></section>`;
   const filters = html`<div class="row"><input id="ct-q" type="search" placeholder="Code, name or colour" value="${f.q}" style="flex:1;min-width:160px" aria-label="Search articles" />
     <select id="ct-fb" aria-label="Brand">${opts(d.brands.map((b) => ({ id: b.id, label: b.name })), f.brand, 'All brands')}</select>
     <select id="ct-fc" aria-label="Category">${opts(d.cats.map((c) => ({ id: c.id, label: c.name })), f.cat, 'All categories')}</select>
@@ -79,7 +79,7 @@ export async function finishedView(): Promise<Raw> {
         <td>${x.brand ?? '–'}<br><small>${x.category_name ?? x.category ?? '–'}</small></td><td>${(x.colours as { name: string }[]).map((c) => c.name).join(', ')}</td><td>${(x.cups as string[]).join(', ') || '–'}</td>
         <td>${sizesText(x.sizes)}</td><td>${x.packing}</td><td class="r">${rs(x.rate)}</td><td class="r">${pk && x.rate ? money(String(Number(x.rate) * x.pcs_per_pack)) : '–'}</td>
         <td class="r"><b>${rs(x.mrp)}</b></td><td class="r">${pk && x.mrp ? money(String(Number(x.mrp) * x.pcs_per_pack)) : '–'}</td>
-        <td class="r">${x.n_skus}<br><small title="Barcodes made: piece and box">▥ ${x.n_piece_bc}${pk ? ` · box ${x.n_box_bc}` : ''}</small></td><td>${sChip(x.status)}</td></tr>`;
+        <td class="r">${x.n_skus}<br><small title="Barcodes made: piece and box">▥ ${x.n_piece_bc} · box ${x.n_box_bc}</small></td><td>${sChip(x.status)}</td></tr>`;
     })}</tbody></table></div>` : html`<p class="empty">No articles match.</p>`;
   return html`${head('Finished goods', 'Every article: brand, category, colours, cups, sizes, packing, rate and MRP, HSN, status and barcodes. Articles are added and changed here; the CRM app uses the same list.', d.create ? html`<button class="primary" data-act="ct-new">New article</button>` : undefined)}
   ${bulkBar('skus', d.create)}${tiles}${st.form === 'new' && d.create ? articleForm(d, null) : ''}
@@ -91,6 +91,8 @@ function articleForm(d: FD, s: Row | null): Raw {
   const v = (k: string, dflt: unknown = '') => st.draft[k] ?? String(dflt ?? '');
   const on = (list: Row[], keep: string[]) => list.filter((x) => x.status === 'active' || keep.includes(x.id) || keep.includes(x.code));
   const picked = (k: string, from: string[]) => (st.draft[k] !== undefined ? st.draft[k].split(',').filter(Boolean) : from);
+  const sizesNow = picked('ct-size', (s?.sizes ?? []) as string[]);
+  const otherSizes = [...new Set([...((s?.sizes ?? []) as string[]), ...sizesNow])].filter((z) => !(cat.SIZES as readonly string[]).includes(z));
   const cols = picked('ct-col', ((s?.colours ?? []) as { code: string }[]).map((c) => c.code)); const cups = picked('ct-cup', (s?.cups ?? []) as string[]);
   const pcs = cat.packPcs(v('ct-pack', s?.packing ?? 'Single piece'));
   return html`<form class="card form" data-form="ct-article" data-id="${s?.id ?? ''}"><h2>${s ? `Change ${s.code}` : 'New article'}</h2>
@@ -105,11 +107,12 @@ function articleForm(d: FD, s: Row | null): Raw {
       <label>MRP per piece (₹)<input id="ct-mrp" inputmode="decimal" value="${v('ct-mrp', s?.mrp)}" placeholder="Printed MRP of one piece" /></label>
       <label>Launched on <small>(optional)</small><input id="ct-launch" type="date" value="${v('ct-launch', s?.launched_on)}" /></label>
       ${s ? html`<label>Status<select id="ct-status">${opts(Object.entries(cat.ARTICLE_STATUS).map(([k, t]) => ({ id: k, label: `${STATUS_LABEL[k]}: ${t}` })), v('ct-status', s.status))}</select></label>` : ''}</div>
-    ${pcs > 1 ? html`<p class="sub">${v('ct-pack', s?.packing)}: ${pcs} pieces a pack. Rate and MRP per pack are worked out from the piece figures.</p>` : html`<p class="sub">Single piece: there is no pack, so there is no box barcode.</p>`}
+    ${pcs > 1 ? html`<p class="sub">${v('ct-pack', s?.packing)}: ${pcs} pieces a pack. Rate and MRP per pack are worked out from the piece figures.</p>` : html`<p class="sub">One piece a pack, so the pack's rate and MRP are the piece's.</p>`}
     <fieldset><legend>Colours <small>(from the Colours master)</small></legend><div class="row">${on(d.colours, cols).map((c) => html`<label class="chk"><input type="checkbox" name="ct-col" value="${c.code}" ${cols.includes(c.code) ? raw('checked') : ''} /> ${c.name} <small class="mono">${c.code}</small></label>`)}</div></fieldset>
     <fieldset><legend>Cups <small>(bras only; leave all unticked for other garments)</small></legend><div class="row">${cat.CUPS.map((c) => html`<label class="chk"><input type="checkbox" name="ct-cup" value="${c}" ${cups.includes(c) ? raw('checked') : ''} /> ${c}</label>`)}</div></fieldset>
-    <label>Sizes <small>(in order, separated by commas)</small><input id="ct-sizes" value="${v('ct-sizes', (s?.sizes ?? []).join(', '))}" placeholder="32/M, 34/L, 36/XL, 38/2XL" required /></label>
-    <p class="sub">Saving makes a SKU for every colour · cup · size, each with a piece barcode (and a box barcode when the packing holds more than one piece). A size, colour or cup that SKUs already use cannot be removed.</p>
+    <fieldset><legend>Sizes</legend><div class="row">${[...cat.SIZES, ...otherSizes].map((z) => html`<label class="chk"><input type="checkbox" name="ct-size" value="${z}" ${sizesNow.includes(z) ? raw('checked') : ''} /> ${z}</label>`)}</div>
+      <label>Other sizes <small>(not in the list above, separated by commas, up to 8 characters each)</small><input id="ct-size-other" value="${v('ct-size-other')}" placeholder="26/XXS, 54" /></label></fieldset>
+    <p class="sub">Saving makes a SKU for every colour · cup · size, and gives each one a piece barcode and a box barcode automatically. A size, colour or cup that SKUs already use cannot be removed.</p>
     <div class="row"><button class="primary" type="submit">Save article</button><button type="button" data-act="ct-cancel">Cancel</button></div></form>`;
 }
 
@@ -117,16 +120,16 @@ function detail(d: FD & { create: boolean }, sel: Awaited<ReturnType<typeof bom.
   const s = sel.style as Row; const pk = s.pcs_per_pack > 1;
   const colName = new Map((s.colours as { code: string; name: string }[]).map((c) => [c.code, c.name]));
   const missing = (s.colours as unknown[]).length * Math.max(1, (s.cups as string[]).length) * (s.sizes as string[]).length - sel.skus.length;
-  const noBc = sel.skus.filter((k: Row) => !k.ean_piece || (pk && !k.ean_box)).length;
+  const noBc = sel.skus.filter((k: Row) => !k.ean_piece || !k.ean_box).length;
   if (st.form === 'edit' && d.create) return articleForm(d, s);
   return html`<section class="card"><div class="row between"><h2>${s.code} · ${s.name} ${sChip(s.status)}</h2>
     ${d.create ? html`<div class="row"><button data-act="ct-edit-art">Change article</button>${missing > 0 && s.status !== 'disable' ? html`<button data-act="ct-skus">Make ${missing} missing SKU${missing === 1 ? '' : 's'}</button>` : ''}${noBc ? html`<button data-act="ct-bc">Make missing barcodes</button>` : ''}</div>` : ''}</div>
     <p class="sub">${cat.ARTICLE_STATUS[s.status]}. ${s.packing}${pk ? ` (${s.pcs_per_pack} pcs)` : ''} · rate ${rs(s.rate)} · MRP ${rs(s.mrp)} a piece${s.launched_on ? ` · launched ${s.launched_on}` : ''}</p>
-    <h3>SKUs and barcodes</h3><p class="sub">Every SKU has a piece barcode${pk ? ' and a box barcode' : ''}: EAN-13 under the GS1 prefix ${cat.EAN_PREFIX.slice(0, 3)} ${cat.EAN_PREFIX.slice(3)} (a sample prefix until yours is set), never repeated. To use a label that is already printed, scan or type its barcode over the one shown. For many at once, use the SKU CSV above.</p>
-    ${sel.skus.length ? html`<div class="scroll"><table class="mini"><thead><tr><th>Colour</th><th>Cup</th><th>Size</th><th>SKU</th><th>Piece barcode</th>${pk ? html`<th>Box barcode</th>` : ''}<th>Stock item</th></tr></thead><tbody>${sel.skus.map((k: Row) => html`<tr>
+    <h3>SKUs and barcodes</h3><p class="sub">Every SKU has a piece barcode and a box barcode${pk ? ` (the box of ${s.pcs_per_pack})` : ''}, made automatically: EAN-13 under the GS1 prefix ${cat.EAN_PREFIX.slice(0, 3)} ${cat.EAN_PREFIX.slice(3)} (a sample prefix until yours is set), never repeated. To use a label that is already printed, scan or type its barcode over the one shown. For many at once, use the SKU CSV above.</p>
+    ${sel.skus.length ? html`<div class="scroll"><table class="mini"><thead><tr><th>Colour</th><th>Cup</th><th>Size</th><th>SKU</th><th>Piece barcode</th><th>Box barcode</th><th>Stock item</th></tr></thead><tbody>${sel.skus.map((k: Row) => html`<tr>
       <td>${colName.get(k.colour_code) ?? k.colour_code}</td><td>${k.cup || '–'}</td><td>${k.size}</td><td class="mono">${k.code}</td>
       <td>${d.create ? html`<input class="mono" data-ctbc="${k.id}|piece" value="${k.ean_piece ?? ''}" inputmode="numeric" placeholder="Scan piece barcode" aria-label="Piece barcode ${esc(k.code)}" style="width:150px" />` : html`<span class="mono">${k.ean_piece ?? '–'}</span>`}</td>
-      ${pk ? html`<td>${d.create ? html`<input class="mono" data-ctbc="${k.id}|box" value="${k.ean_box ?? ''}" inputmode="numeric" placeholder="Scan box barcode" aria-label="Box barcode ${esc(k.code)}" style="width:150px" />` : html`<span class="mono">${k.ean_box ?? '–'}</span>`}</td>` : ''}
+      <td>${d.create ? html`<input class="mono" data-ctbc="${k.id}|box" value="${k.ean_box ?? ''}" inputmode="numeric" placeholder="Scan box barcode" aria-label="Box barcode ${esc(k.code)}" style="width:150px" />` : html`<span class="mono">${k.ean_box ?? '–'}</span>`}</td>
       <td>${chip(k.status === 'active' ? 'active' : 'draft', k.status === 'active' ? 'ready' : 'waiting for BOM')}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">No SKUs yet.</p>`}
     <p class="sub">A SKU's stock item becomes ready when the article's BOM is approved on the BOM &amp; packs screen.</p></section>`;
 }
@@ -135,7 +138,7 @@ function detail(d: FD & { create: boolean }, sel: Awaited<ReturnType<typeof bom.
 const checks = (name: string) => [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((e) => (e as HTMLInputElement).value);
 const capture = () => {
   document.querySelectorAll('form[data-form=ct-article] input[id], form[data-form=ct-article] select[id]').forEach((e) => { const i = e as HTMLInputElement; st.draft[i.id] = i.value; });
-  st.draft['ct-col'] = checks('ct-col').join(','); st.draft['ct-cup'] = checks('ct-cup').join(',');
+  st.draft['ct-col'] = checks('ct-col').join(','); st.draft['ct-cup'] = checks('ct-cup').join(','); st.draft['ct-size'] = checks('ct-size').join(',');
 };
 
 export async function onClick(t: HTMLElement): Promise<boolean> {
@@ -174,7 +177,7 @@ export async function onSubmit(form: string, f?: HTMLElement): Promise<boolean> 
   const fields = {
     name: val('ct-name'), brandId: val('ct-brand') || null, categoryId: val('ct-cat') || null, hsnCode: val('ct-hsn') || undefined, commodity: val('ct-com') || null,
     packing: val('ct-pack'), rate: val('ct-rate') || null, mrp: val('ct-mrp') || null, launchedOn: val('ct-launch') || null,
-    sizes: val('ct-sizes').split(',').map((x) => x.trim()).filter(Boolean), colours: checks('ct-col'), cups: checks('ct-cup'),
+    sizes: [...new Set([...checks('ct-size'), ...val('ct-size-other').split(',').map((x) => x.trim()).filter(Boolean)])], colours: checks('ct-col'), cups: checks('ct-cup'),
   };
   if (!sid) {
     const r = await act('Article saved with its SKUs and barcodes', async (c) => { const s = await bom.createStyle(c, { code: val('ct-code'), ...fields }); await bom.createSkus(c, { styleId: s.id }); return s; });

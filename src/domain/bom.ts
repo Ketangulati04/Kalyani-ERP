@@ -140,7 +140,6 @@ export async function updateStyle(ctx: Ctx, i: ArticleInput & { styleId: string;
     [s.id, i.name?.trim() || s.name, a.category ?? (i.category === undefined ? s.category : i.category || null), i.description ?? s.description, sizes, JSON.stringify(colours), a.brandId, a.categoryId, a.commodity, cups, a.packing, a.pcs,
      a.rate, a.mrp, a.launchedOn, a.hsn, a.gst, status])).rows[0];
   if (a.hsn !== s.hsn_code || a.gst !== s.gst_rate) await ctx.db.query('UPDATE item SET hsn_code=$2, gst_rate=$3 WHERE id IN (SELECT item_id FROM sku WHERE style_id=$1)', [s.id, a.hsn, a.gst]);
-  if (a.pcs > 1 && s.pcs_per_pack <= 1) await fillEans(ctx, s.id); // a pack now exists, so its SKUs get box barcodes
   await audit(ctx, { action: 'style.update', entityType: 'product_style', entityId: s.id,
     before: { name: s.name, status: s.status, sizes: s.sizes, colours: s.colours, cups: s.cups, packing: s.packing, rate: s.rate, mrp: s.mrp, brand: s.brand_id, category: s.category_id },
     after: { name: r.name, status, sizes, colours, cups, packing: a.packing, rate: a.rate, mrp: a.mrp, brand: a.brandId, category: a.categoryId } });

@@ -64,11 +64,13 @@ describe('finished-goods articles (the CRM article master)', () => {
     expect(list.find((s) => s.code === 'KL-305')!.status).toBe('close');
     expect(list.find((s) => s.code === 'MS-640')).toMatchObject({ status: 'disable', n_skus: 0 });
   });
-  it('every SKU gets a piece barcode, and a box barcode when packed more than one to a pack; none repeat', async () => {
+  it('every SKU gets a piece barcode and a box barcode automatically; none repeat', async () => {
     const r = (await w.pool.query(`SELECT s.code, s.pcs_per_pack, e.kind, e.code AS ean FROM sku_ean e JOIN sku k ON k.id=e.sku_id JOIN product_style s ON s.id=k.style_id`)).rows;
     expect(r.every((x) => cat.isEan13(x.ean) && x.ean.startsWith(cat.EAN_PREFIX))).toBe(true);
     expect(new Set(r.map((x) => x.ean)).size).toBe(r.length);
-    expect(r.some((x) => x.code === 'KL-102' && x.kind === 'box')).toBe(false);   // single piece: no box
+    expect(r.filter((x) => x.code === 'KL-102' && x.kind === 'box').length).toBe(6); // single piece still gets a box barcode
+    const n = (await w.pool.query(`SELECT count(*)::int AS n FROM sku`)).rows[0].n;
+    expect(r.filter((x) => x.kind === 'piece').length).toBe(n); expect(r.filter((x) => x.kind === 'box').length).toBe(n);
     const kl101 = r.filter((x) => x.code === 'KL-101');
     expect(kl101.filter((x) => x.kind === 'piece').length).toBe(24); expect(kl101.filter((x) => x.kind === 'box').length).toBe(24);
     const one = r.find((x) => x.code === 'KL-101' && x.kind === 'box')!;
@@ -79,7 +81,6 @@ describe('finished-goods articles (the CRM article master)', () => {
     const other = (await w.pool.query(`SELECT e.code FROM sku_ean e JOIN sku k ON k.id=e.sku_id WHERE k.code='KL-102-AST-34L' AND e.kind='piece'`)).rows[0].code;
     await rejects(w.as('md', (c) => cat.setEan(c, { skuId: k.id, kind: 'piece', code: '8901234567891' })), 'not a valid EAN-13');
     await rejects(w.as('md', (c) => cat.setEan(c, { skuId: k.id, kind: 'piece', code: other })), 'already the piece barcode of KL-102-AST-34L');
-    await rejects(w.as('md', (c) => cat.setEan(c, { skuId: k.id, kind: 'box', code: '8901234567890' })), 'no box barcode');
     await rejects(w.as('sto', (c) => cat.setEan(c, { skuId: k.id, kind: 'piece', code: '8901234567890' })), 'Not permitted');
     await w.as('md', (c) => cat.setEan(c, { skuId: k.id, kind: 'piece', code: '8901234567890' }));
     expect((await w.pool.query(`SELECT code, source FROM sku_ean WHERE sku_id=$1 AND kind='piece'`, [k.id])).rows[0]).toEqual({ code: '8901234567890', source: 'scanned' });
@@ -99,7 +100,6 @@ describe('finished-goods articles (the CRM article master)', () => {
     await rejects(w.as('md', (c) => bom.updateStyle(c, { styleId: s.id, expectedVersion: v, cups: ['B'] })), 'Cup C already has SKUs');
     await w.as('md', (c) => bom.updateStyle(c, { styleId: s.id, expectedVersion: v, cups: ['B', 'C', 'D'] }));
     expect((await w.as('md', (c) => bom.createSkus(c, { styleId: s.id }))).created).toBe(4);
-    // single piece → box of 3: the SKUs get box barcodes
     const v2 = await ver('product_style', s.id);
     await w.as('md', (c) => bom.updateStyle(c, { styleId: s.id, expectedVersion: v2, packing: 'Single piece' }));
     expect((await w.pool.query(`SELECT pcs_per_pack FROM product_style WHERE id=$1`, [s.id])).rows[0].pcs_per_pack).toBe(1);
