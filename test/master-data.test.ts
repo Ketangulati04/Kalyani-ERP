@@ -4,7 +4,6 @@ import type { World } from '../src/seed/demo.js';
 import * as md from '../src/domain/master-data.js';
 import * as masters from '../src/domain/masters.js';
 import * as po from '../src/domain/po.js';
-import { seedSalesBase } from '../src/seed/sales-demo.js';
 import { seedMastersDemo } from '../src/seed/masters-demo.js';
 
 /** Expect a refusal whose code or message contains the given text. */
@@ -19,7 +18,7 @@ async function rejects(p: Promise<unknown>, part: string) {
 let w: World; let t: Record<string, string>;
 beforeAll(async () => {
   w = await freshWorld('masters');
-  await seedSalesBase(w); await seedMastersDemo(w, true);
+  await seedMastersDemo(w);
   t = Object.fromEntries((await w.pool.query('SELECT code, id FROM material_type')).rows.map((r) => [r.code, r.id]));
 });
 afterAll(async () => { await w.pool.end(); });
@@ -77,7 +76,7 @@ describe('materials', () => {
   });
 });
 
-describe('vendors and clients', () => {
+describe('vendors', () => {
   it('validates GSTIN / PAN and catches duplicates', async () => {
     await rejects(w.as('buy', (c) => md.createParty(c, { name: 'Bad GST', role: 'vendor', gstin: '123' })), 'GSTIN');
     await rejects(w.as('buy', (c) => md.createParty(c, { name: 'Mismatch', role: 'vendor', gstin: '24AAACA4321B1Z7', pan: 'ZZZZZ9999Z' })), 'PAN does not match');
@@ -108,21 +107,21 @@ describe('vendors and clients', () => {
     await rejects(w.as('buy', (c) => md.addAddress(c, { partnerId: v.id, kind: 'billing', line1: 'x', pincode: '12' })), 'Pincode');
     await rejects(w.as('buy', (c) => md.addContact(c, { partnerId: v.id, name: 'X', email: 'nope' })), 'Email');
   });
-  it('suspend needs commercial; a suspended customer cannot be sold to; reactivation restores', async () => {
-    const c1 = (await w.pool.query(`SELECT * FROM partner WHERE code='C-002'`)).rows[0];
+  it('suspend needs commercial; a suspended vendor cannot be ordered from; reactivation restores', async () => {
+    const c1 = (await w.pool.query(`SELECT * FROM partner WHERE name='Anand Elastics'`)).rows[0];
     await rejects(w.as('buy', (c) => md.suspendParty(c, { partnerId: c1.id, expectedVersion: c1.version, reason: 'x' })), 'FORBIDDEN');
     const s = await w.as('com', (c) => md.suspendParty(c, { partnerId: c1.id, expectedVersion: c1.version, reason: 'Cheque bounced' }));
     expect(s.status).toBe('suspended');
-    const sales = await import('../src/domain/sales.js');
-    await rejects(w.as('sal', (c) => sales.createOrder(c, { siteId: w.siteId, customerId: c1.id, lines: [{ itemId: w.items.fabric, qty: '10', rate: '300' }] })), 'must be approved');
+    const po = await import('../src/domain/po.js');
+    await rejects(w.as('buy', (c) => po.createPO(c, { siteId: w.siteId, partnerId: c1.id, lines: [{ itemId: w.items.trim, qty: '10' }] })), 'not an active vendor');
     expect((await w.as('com', (c) => md.reactivateParty(c, { partnerId: c1.id, expectedVersion: s.version }))).status).toBe('active');
   });
-  it('lists by role with totals, search and a client waiting for approval; bank is masked for non-finance', async () => {
+  it('lists vendors with totals, search and one waiting for checks; bank is masked for non-finance', async () => {
     const vs = await md.listParties(w.pool, uid('buy'), { role: 'vendor' });
     expect(vs!.length).toBeGreaterThanOrEqual(4);
     expect(vs!.find((x) => x.code === 'V-001')!.pos).toBeGreaterThanOrEqual(0);
-    const cs = await md.listParties(w.pool, uid('sal'), { role: 'customer', q: 'metro' });
-    expect(cs![0]).toMatchObject({ name: 'Metro Innerwear', status: 'verification' });
+    const cs = await md.listParties(w.pool, uid('buy'), { role: 'vendor', q: 'shree' });
+    expect(cs![0]).toMatchObject({ name: 'Shree Packaging', status: 'verification' });
     expect(await md.listParties(w.pool, uid('hrm'), { role: 'vendor' })).toBeNull();
     const v = (await w.pool.query(`SELECT id FROM partner WHERE code='V-001'`)).rows[0];
     expect((await md.getParty(w.pool, uid('buy'), v.id))!.p.bank_account).toMatch(/^••••/);
@@ -145,24 +144,26 @@ describe('bulk add', () => {
     expect(new Set(codes).size).toBe(2);
   });
   it('parties: finds bad GSTIN, duplicate inside the paste, and loads good rows', async () => {
-    const bad = `role,name,gstin,city\nvendor,Paste One,,Pune\nclient,Paste Two,BADGST,Pune\nvendor,Paste One,,Pune`;
+    const bad = `role,name,gstin,city\nvendor,Paste One,,Pune\nvendor,Paste Two,BADGST,Pune\nvendor,Paste One,,Pune\ncustomer,Paste Three,,Pune`;
     const r = await w.as('buy', (c) => md.importParties(c, bad));
-    expect(r.created).toBe(0); expect(r.errors.map((e) => e.row)).toEqual([3, 4]);
-    const ok = await w.as('buy', (c) => md.importParties(c, `role,name,city,contact_name\nvendor,Paste One,Pune,Ram\ncustomer,Paste Two,Pune,Sita`));
+    expect(r.created).toBe(0); expect(r.errors.map((e) => e.row)).toEqual([3, 4, 5]);
+    expect(r.errors[2].message).toContain('CRM app');                       // customers are kept in the CRM app
+    const ok = await w.as('buy', (c) => md.importParties(c, `name,city,contact_name\nPaste One,Pune,Ram\nPaste Two,Pune,Sita`));
     expect(ok.created).toBe(2);
-    expect((await w.pool.query(`SELECT 1 FROM partner WHERE name LIKE 'Paste %' AND is_customer`)).rowCount).toBe(1);
+    expect((await w.pool.query(`SELECT 1 FROM partner WHERE name LIKE 'Paste %' AND is_vendor AND NOT is_customer`)).rowCount).toBe(2);
+    await rejects(w.as('buy', (c) => md.createParty(c, { name: 'Shop Co', role: 'customer' as never })), 'CRM app');
   });
 
   it('billing and shipping addresses: required fields, same-as-billing, defaults, state list', async () => {
-    const c = await w.as('sal', (cx) => md.createParty(cx, { name: 'Addr Test Co', role: 'customer', billing: { line1: '1 Main Rd', city: 'Surat', state: 'Gujarat', pincode: '395003' }, shippingSameAsBilling: true }));
+    const c = await w.as('buy', (cx) => md.createParty(cx, { name: 'Addr Test Co', role: 'vendor', billing: { line1: '1 Main Rd', city: 'Surat', state: 'Gujarat', pincode: '395003' }, shippingSameAsBilling: true }));
     const list = (await w.pool.query('SELECT kind, is_default, state FROM partner_address WHERE partner_id=$1 ORDER BY kind', [c.id])).rows;
     expect(list.map((r) => r.kind)).toEqual(['billing', 'shipping']);
     expect(list.every((r) => r.is_default && r.state === 'Gujarat')).toBe(true);
-    await rejects(w.as('sal', (cx) => md.addAddress(cx, { partnerId: c.id, kind: 'shipping', line1: 'x' })), 'need city');
-    await rejects(w.as('sal', (cx) => md.addAddress(cx, { partnerId: c.id, kind: 'shipping', line1: 'x', city: 'a', state: 'Atlantis', pincode: '395003' })), 'not in the list');
-    const second = await w.as('sal', (cx) => md.addAddress(cx, { partnerId: c.id, kind: 'shipping', line1: '9 Dock Rd', city: 'Mundra', state: 'Gujarat', pincode: '370421' }));
+    await rejects(w.as('buy', (cx) => md.addAddress(cx, { partnerId: c.id, kind: 'shipping', line1: 'x' })), 'need city');
+    await rejects(w.as('buy', (cx) => md.addAddress(cx, { partnerId: c.id, kind: 'shipping', line1: 'x', city: 'a', state: 'Atlantis', pincode: '395003' })), 'not in the list');
+    const second = await w.as('buy', (cx) => md.addAddress(cx, { partnerId: c.id, kind: 'shipping', line1: '9 Dock Rd', city: 'Mundra', state: 'Gujarat', pincode: '370421' }));
     expect(second.is_default).toBe(false);
-    await w.as('sal', (cx) => md.setDefaultAddress(cx, { addressId: second.id }));
+    await w.as('buy', (cx) => md.setDefaultAddress(cx, { addressId: second.id }));
     const d = (await w.pool.query(`SELECT count(*)::int n FROM partner_address WHERE partner_id=$1 AND kind='shipping' AND is_default`, [c.id])).rows[0].n;
     expect(d).toBe(1);
     expect(md.INDIAN_STATES.length).toBe(36);

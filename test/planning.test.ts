@@ -2,7 +2,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { freshWorld } from './helpers.js';
 import type { World } from '../src/seed/demo.js';
 import * as plan from '../src/domain/planning.js';
-import { seedSalesBase } from '../src/seed/sales-demo.js';
 import { seedMastersDemo } from '../src/seed/masters-demo.js';
 
 async function rejects(p: Promise<unknown>, part: string) {
@@ -15,7 +14,7 @@ async function rejects(p: Promise<unknown>, part: string) {
 }
 let w: World; let blk: string; let rib: string; let styleId: string;
 beforeAll(async () => {
-  w = await freshWorld('plan'); await seedSalesBase(w); await seedMastersDemo(w, true);
+  w = await freshWorld('plan'); await seedMastersDemo(w);
   await w.addUser('pln', 'PLN', { displayName: 'Planner' });
   blk = (await w.pool.query(`SELECT item_id FROM sku WHERE code='BRF-01-BLK-M'`)).rows[0].item_id;
   rib = (await w.pool.query(`SELECT id FROM item WHERE name LIKE 'Rib knit%'`)).rows[0].id;
@@ -57,8 +56,9 @@ describe('six months of finished pieces', () => {
     await w.as('pln', (c) => plan.setItemPlan(c, { itemId: blk, monthlyDemand: '300' }));
   });
   it('works out the average from real sales when no figure is typed', async () => {
-    const cust = (await w.pool.query(`SELECT id FROM partner WHERE code='C-001'`)).rows[0].id;
-    const so = (await w.pool.query(`INSERT INTO sales_order(site_id, number, customer_id, status, total, created_by, created_at) VALUES ($1,'SO-T-1',$2,'confirmed',90000,$3, now() - interval '40 days') RETURNING id`, [w.siteId, cust, uid('sal')])).rows[0];
+    // Sales are entered in the CRM app; a confirmed order that reaches the ERP's sales tables still counts.
+    const cust = (await w.pool.query(`INSERT INTO partner(code, name, is_customer, status) VALUES ('C-T1','Test customer',true,'active') RETURNING id`)).rows[0].id;
+    const so = (await w.pool.query(`INSERT INTO sales_order(site_id, number, customer_id, status, total, created_by, created_at) VALUES ($1,'SO-T-1',$2,'confirmed',90000,$3, now() - interval '40 days') RETURNING id`, [w.siteId, cust, uid('pln')])).rows[0];
     await w.pool.query(`INSERT INTO so_line(so_id, line_no, item_id, qty, unit, rate, amount) VALUES ($1, 99, $2, 900, 'PC', 100, 90000)`, [so.id, (await w.pool.query(`SELECT item_id FROM sku WHERE code='BRF-01-WHT-L'`)).rows[0].item_id]);
     const k = sku(await plan.computePlan(w.pool, uid('pln')), 'BRF-01-WHT-L');
     expect(k.avg_demand).toBe(300);                            // 900 pieces in the last 3 months

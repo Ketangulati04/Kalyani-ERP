@@ -16,8 +16,8 @@ export const TYPES: { code: string; name: string; kind: string; unit: string; tr
   { code: 'GARMENT', name: 'Finished garments', kind: 'FG', unit: 'PC', tracking: 'LOT', prefix: 'FG', attrs: 'Size|text|required\nColour|text' },
 ];
 
-/** Material types, a fuller materials list, vendors and clients with contacts, addresses and rate cards. */
-export async function seedMastersDemo(w: World, withSales: boolean) {
+/** Material types, a fuller materials list, vendors with contacts, addresses and rate cards. */
+export async function seedMastersDemo(w: World) {
   const t: Record<string, string> = {};
   for (const x of TYPES) t[x.code] = (await w.as('md', (c) => md.createMaterialType(c, { code: x.code, name: x.name, kind: x.kind, defaultUnit: x.unit, tracking: x.tracking, prefix: x.prefix, attrs: A(x.attrs) }))).id;
 
@@ -77,21 +77,6 @@ export async function seedMastersDemo(w: World, withSales: boolean) {
   await rate(v3, cup, '9.5000');
   await rate(v1, rib, '165.0000'); await rate(v2, picot, '3.1000'); await rate(v1, thr, '950.0000'); await rate(v2, lbl, '0.6000');
 
-  // Clients. C-001 and C-002 exist when the sales demo ran.
-  if (withSales) {
-    for (const [code, contact, phone, city, state, line, pin] of [
-      ['C-001', 'Lakshmi Narayan', '9886012001', 'Tiruppur', 'Tamil Nadu', '8, Kangeyam Road', '641604'],
-      ['C-002', 'Farhan Qazi', '9820123456', 'Mumbai', 'Maharashtra', '3rd floor, Lower Parel', '400013'],
-    ] as const) {
-      const row = (await w.pool.query('SELECT id, version FROM partner WHERE code=$1', [code])).rows[0];
-      await w.as('sal', (c) => md.updateParty(c, { partnerId: row.id, expectedVersion: row.version, customerType: code === 'C-002' ? 'distributor' : 'retailer', city, state, phone, email: contact.split(' ')[0].toLowerCase() + '@' + (code === 'C-001' ? 'lakshmigarments' : 'urbanwear') + '.example', paymentDays: 45 }));
-      await w.as('sal', (c) => md.addContact(c, { partnerId: row.id, name: contact, role: 'Purchase', phone, primary: true }));
-      await w.as('sal', (c) => md.addAddress(c, { partnerId: row.id, kind: 'billing', label: 'Head office', line1: line, city, state, pincode: pin, phone }));
-      await w.as('sal', (c) => md.addAddress(c, { partnerId: row.id, kind: 'shipping', label: code === 'C-001' ? 'Godown' : 'Warehouse', line1: code === 'C-001' ? 'Plot 22, SIDCO Industrial Estate' : 'Gala 7, Bhiwandi Logistics Park', line2: 'Gate 2, deliveries 9 to 5', city: code === 'C-001' ? city : 'Bhiwandi', state: code === 'C-001' ? state : 'Maharashtra', pincode: code === 'C-001' ? '641606' : '421302', contactName: contact, phone }));
-    }
-    const m = await w.as('sal', (c) => md.createParty(c, { name: 'Metro Innerwear', role: 'customer', customerType: 'distributor', gstin: '29AAACM5566E1Z9', pan: 'AAACM5566E', city: 'Bengaluru', state: 'Karnataka', phone: '9900112233', email: 'anil@metroinnerwear.example', contact: { name: 'Anil Kumar', phone: '9900112233', role: 'Owner' }, billing: { label: 'Office', line1: '45, Brigade Road', city: 'Bengaluru', state: 'Karnataka', pincode: '560001' }, shippingSameAsBilling: true }));
-    await w.as('sal', (c) => masters.submitPartner(c, { partnerId: m.id, expectedVersion: 1 })); // waiting for commercial approval
-  }
   // A style with sizes and colours, its SKUs, an approved BOM and a 3-pack box.
   const st = await w.as('md', (c) => bom.createStyle(c, { code: 'BRF-01', name: 'Classic brief', category: 'Innerwear', hsnCode: '6107', gstRate: '5', sizes: ['S', 'M', 'L', 'XL'], colours: [{ code: 'BLK', name: 'Black' }, { code: 'WHT', name: 'White' }, { code: 'NVY', name: 'Navy' }] }));
   await w.as('md', (c) => bom.createSkus(c, { styleId: st.id }));

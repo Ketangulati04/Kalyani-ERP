@@ -76,7 +76,7 @@ const NUMWORD: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3,
 /** Things people ask about that this system does not hold yet. Better to say so than to guess. */
 const NOT_BUILT: [RegExp, string][] = [
   [/ (invoice|invoices|receivable|receivables|outstanding payments?) /, 'Invoicing and payments are not in the system yet (the finance module is not built).'],
-  [/ (sale|sales|sold|selling|customer|customers|revenue|crm|leads?) /, 'You do not have a role that can see sales or CRM data.'],
+  [/ (sale|sales|sold|selling|customer|customers|revenue|crm|leads?) /, 'Sales, customers and leads are kept in the CRM app, not in the ERP.'],
   [/ (production|stitching|cutting|wip|garments?) /, 'Production data is not in the system yet.'],
   [/ (profit|expense|expenses|ledger|gst|tax invoice|accounts?) /, 'Finance and accounting data are not in the system yet.'],
 ];

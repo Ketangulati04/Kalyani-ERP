@@ -9,7 +9,7 @@ import { bulkBar } from './views-bulk.js';
 const ANY = { anySite: true } as const;
 const st = {
   matQ: '', matType: '', matStatus: '', mat: '', newType: '', draft: {} as Record<string, string>, typ: '', unitForm: false,
-  q: { vendor: '', distributor: '', retailer: '' } as Record<string, string>, stat: { vendor: '', distributor: '', retailer: '' } as Record<string, string>, sel: { vendor: '', distributor: '', retailer: '' } as Record<string, string>,
+  q: { vendor: '' } as Record<string, string>, stat: { vendor: '' } as Record<string, string>, sel: { vendor: '' } as Record<string, string>,
   importRes: null as null | { created: number; errors: { row: number; message: string }[]; dryRun: boolean; what: string },
 };
 const open = new Set<string>();
@@ -91,7 +91,7 @@ async function itemsView(mode: 'materials' | 'finished'): Promise<Raw> {
     ${open.has('matoff') ? html`<form class="row" data-form="mat-off"><input id="mat-reason" placeholder="Why is it being switched off?" style="flex:1" /><button type="submit">Confirm</button></form>` : ''}
     <h3>In stock</h3>${s.stock.length ? html`<table class="mini"><thead><tr><th>Roll / lot</th><th>Where</th><th>State</th><th class="r">Qty</th></tr></thead><tbody>${s.stock.map((r) => html`<tr><td>${r.label}</td><td>${r.location}</td><td>${chip(r.status.toLowerCase() === 'accepted' ? 'accepted' : r.status.toLowerCase() === 'hold' ? 'held' : 'rejected')}</td><td class="r">${qty(r.qty)}</td></tr>`)}</tbody></table>` : html`<p class="empty">None on hand.</p>`}
     <h3>Vendor prices</h3>${s.rates.length ? html`<table class="mini"><tbody>${s.rates.map((r) => html`<tr><td>${r.vendor}</td><td class="r">${money(r.rate)} / ${r.unit}${Number(r.min_qty) ? html` <small>from ${qty(r.min_qty)}</small>` : ''}</td><td>${r.status === 'approved' ? chip('approved') : chip(r.status)}</td></tr>`)}</tbody></table>` : html`<p class="empty">No vendor price on file.</p>`}
-    <p class="sub">Used on ${s.used.po} purchase order line${s.used.po === 1 ? '' : 's'} and ${s.used.so} sales order line${s.used.so === 1 ? '' : 's'}.</p>
+    <p class="sub">Used on ${s.used.po} purchase order line${s.used.po === 1 ? '' : 's'}.</p>
     <h3>History</h3><ul class="timeline">${s.history.map((h: { at: string; action: string; who: string; reason: string | null }) => html`<li><b>${h.action.replace('item.', '').replace(/\./g, ' ')}</b> by ${h.who ?? 'system'} <small>${when(h.at)}${h.reason ? ' · ' + h.reason : ''}</small></li>`)}</ul>` : html`<p class="empty">Pick a material to see its details.</p>`}</div></section>`;
 }
 
@@ -116,34 +116,35 @@ export async function typesView(): Promise<Raw> {
     ${d.unit ? html`<form class="row" data-form="newunit"><input id="un-code" placeholder="Code, e.g. CONE" style="width:120px" required /><input id="un-name" placeholder="Name" required /><select id="un-prec"><option value="0">whole numbers</option><option value="3" selected>3 decimals</option></select><button type="submit">Add unit</button></form>` : ''}</div></section>`;
 }
 
-// ───────────────────────── Vendors & clients ─────────────────────────
-export async function partiesView(kind: 'vendor' | 'distributor' | 'retailer'): Promise<Raw> {
-  const role = kind === 'vendor' ? 'vendor' : 'customer'; const customerType = kind === 'vendor' ? undefined : kind;
-  const V = role === 'vendor'; const W = V ? 'Vendors' : kind === 'distributor' ? 'Distributors' : 'Retailers'; const noun = kind;
+// ───────────────────────── Vendors ─────────────────────────
+// Customers (distributors and retailers) are kept in the CRM app, so the ERP's party screen is for vendors only.
+export async function partiesView(kind: 'vendor'): Promise<Raw> {
+  const role = 'vendor' as const;
+  const V = true; const W = 'Vendors'; const noun = kind;
   const d = await read(async (db) => {
-    const all = await md.listParties(db, uid(), { role, customerType });
-    const list = all && await md.listParties(db, uid(), { role, customerType, q: st.q[kind], status: st.stat[kind] });
+    const all = await md.listParties(db, uid(), { role });
+    const list = all && await md.listParties(db, uid(), { role, q: st.q[kind], status: st.stat[kind] });
     const sel = st.sel[kind] ? await md.getParty(db, uid(), st.sel[kind]).catch(() => null) : null;
     const c = (p: string) => can(db, uid(), p, ANY);
     return { all, list, sel, items: (await db.query(`SELECT id, code, name FROM item WHERE status='active' ORDER BY code`)).rows,
       create: await c('partner.create'), edit: await c('partner.edit'), submit: await c('partner.submit'), bankOk: await c('partner.bank.approve'), approve: await c('partner.trade.approve'), suspend: await c('partner.suspend'),
-      ratePropose: await c('rate.propose'), rateApprove: await c('rate.approve'), terms: await c('customer.terms'), bankView: await c('partner.bank.view') };
+      ratePropose: await c('rate.propose'), rateApprove: await c('rate.approve'), bankView: await c('partner.bank.view') };
   });
   if (!d.all) return denied(W, V ? 'Who you buy from.' : 'Who you sell to.', `Your role cannot see ${noun}s.`);
   const s = d.sel; const p = s?.p;
   const waiting = d.all.filter((x) => ['draft', 'verification'].includes(x.status));
-  const total = d.all.reduce((a, x) => a + Number(V ? x.po_value : x.order_value), 0);
-  const top = [...d.all].sort((a, b) => Number(V ? b.po_value : b.order_value) - Number(V ? a.po_value : a.order_value)).slice(0, 5).filter((x) => Number(V ? x.po_value : x.order_value) > 0);
-  const topMax = Math.max(...top.map((x) => Number(V ? x.po_value : x.order_value)), 1);
+  const total = d.all.reduce((a, x) => a + Number(x.po_value), 0);
+  const top = [...d.all].sort((a, b) => Number(b.po_value) - Number(a.po_value)).slice(0, 5).filter((x) => Number(x.po_value) > 0);
+  const topMax = Math.max(...top.map((x) => Number(x.po_value)), 1);
   const mine = p && p.created_by === uid();
   const rateMine = (r: { proposed_by: string }) => r.proposed_by === uid();
   const step = (label: string, on: boolean, done: boolean) => html`<li class="${done ? 'done' : on ? 'now' : ''}">${label}</li>`;
   const phase = !p ? 0 : p.status === 'draft' ? 1 : p.status === 'verification' ? 2 : 3;
-  return html`${head(W, V ? 'Who you buy from: details, contacts, prices and how they have performed.' : kind === 'distributor' ? 'Distributors buy in volume and resell: details, contacts, credit and orders.' : 'Retailers who sell to the end customer: details, contacts, credit and orders.', d.create ? html`<button class="primary" data-act="p-new">New ${noun}</button>` : undefined)}
-  ${bulkBar(V ? 'vendors' : kind === 'distributor' ? 'distributors' : 'retailers', d.create)}
+  return html`${head(W, 'Who you buy from: details, contacts, prices and how they have performed. Distributors and retailers are kept in the CRM app.', d.create ? html`<button class="primary" data-act="p-new">New ${noun}</button>` : undefined)}
+  ${bulkBar('vendors', d.create)}
   <section class="card crm-sum"><div class="crm-k"><span>${W}</span><b>${d.all.length}</b></div><div class="crm-k"><span>Approved</span><b>${d.all.filter((x) => x.status === 'active').length}</b></div><div class="crm-k"><span>Waiting for checks</span><b class="${waiting.length ? 'warn-t' : ''}">${waiting.length}</b></div>
     <div class="crm-k"><span>Suspended</span><b class="${d.all.some((x) => x.status === 'suspended') ? 'bad-t' : ''}">${d.all.filter((x) => x.status === 'suspended').length}</b></div><div class="crm-k"><span>${V ? 'Bought so far' : 'Ordered so far'}</span><b>${inr(total)}</b></div></section>
-  ${top.length ? html`<section class="card"><h2>${V ? 'Biggest vendors by value' : 'Biggest clients by value'}</h2><div class="tbars">${top.map((x) => html`<button class="tbar" data-act="p-pick" data-id="${x.id}"><span>${x.name}</span><i style="width:${Math.max(4, (Number(V ? x.po_value : x.order_value) / topMax) * 100)}%"></i><b>${inr(Number(V ? x.po_value : x.order_value))}</b></button>`)}</div></section>` : ''}
+  ${top.length ? html`<section class="card"><h2>${V ? 'Biggest vendors by value' : 'Biggest clients by value'}</h2><div class="tbars">${top.map((x) => html`<button class="tbar" data-act="p-pick" data-id="${x.id}"><span>${x.name}</span><i style="width:${Math.max(4, (Number(x.po_value) / topMax) * 100)}%"></i><b>${inr(Number(x.po_value))}</b></button>`)}</div></section>` : ''}
   ${false ? importBox('parties', 'role,name,gstin,city,payment_days,contact_name\nvendor,Om Trims,24AAACO1111F1Z4,Surat,30,Raju', 'role (vendor/customer/both), name, gstin, pan, city, state, phone, email, payment_days, contact_name, contact_phone') : ''}
   ${open.has('newparty') && d.create ? html`<form class="card form" data-form="newparty"><h2>New ${noun}</h2><div class="grid2"><label>Name<input id="np-name" required /></label><label>GSTIN<input id="np-gstin" placeholder="29ABCDE1234F1Z5" /></label><label>PAN<input id="np-pan" placeholder="ABCDE1234F" /></label>
     <label>City<input id="np-city" /></label><label>State<select id="np-state">${opts(INDIAN_STATES.map((x) => ({ id: x, label: x })), '', 'Choose…')}</select></label><label>Phone<input id="np-phone" inputmode="tel" /></label><label>Email<input id="np-email" type="email" /></label>
@@ -154,15 +155,15 @@ export async function partiesView(kind: 'vendor' | 'distributor' | 'retailer'): 
     <div class="row"><button class="primary" type="submit">Save as draft</button><button type="button" data-act="p-new">Cancel</button></div></form>` : ''}
   <section class="split"><div class="card"><h2>${W}</h2>
     <div class="row"><input id="p-q" type="search" placeholder="Search name, code, GSTIN or city" value="${st.q[kind]}" style="flex:1;min-width:140px" /><select id="p-sf" aria-label="Status">${opts([{ id: 'active', label: 'Approved' }, { id: 'draft', label: 'Draft' }, { id: 'verification', label: 'Waiting for checks' }, { id: 'suspended', label: 'Suspended' }], st.stat[kind], 'Any status')}</select></div>
-    ${d.list && d.list.length ? html`<div class="scroll"><table class="mini"><thead><tr><th>Code</th><th>Name</th><th>City</th><th class="r">${V ? 'Orders' : 'Orders'}</th><th>Status</th></tr></thead><tbody>${d.list.map((x) => html`<tr class="pick ${x.id === st.sel[kind] ? 'on' : ''}" data-act="p-pick" data-id="${x.id}" tabindex="0"><td>${x.code}</td><td>${x.name}${x.contact ? html`<br><small>${x.contact}</small>` : ''}</td><td>${x.city ?? ''}</td><td class="r">${V ? x.pos : x.orders}</td><td>${sChip(x.status)}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">Nothing matches.</p>`}</div>
+    ${d.list && d.list.length ? html`<div class="scroll"><table class="mini"><thead><tr><th>Code</th><th>Name</th><th>City</th><th class="r">${V ? 'Orders' : 'Orders'}</th><th>Status</th></tr></thead><tbody>${d.list.map((x) => html`<tr class="pick ${x.id === st.sel[kind] ? 'on' : ''}" data-act="p-pick" data-id="${x.id}" tabindex="0"><td>${x.code}</td><td>${x.name}${x.contact ? html`<br><small>${x.contact}</small>` : ''}</td><td>${x.city ?? ''}</td><td class="r">${x.pos}</td><td>${sChip(x.status)}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">Nothing matches.</p>`}</div>
   <div class="card">${s && p ? html`<h2>${p.name} ${sChip(p.status)}</h2><p class="sub">${p.code}${p.city ? ' · ' + p.city : ''}${p.state ? ', ' + p.state : ''} · added by ${s.creator}</p>
     <ol class="wf">${step('Details added', phase === 1, phase > 1)}${step('Checked' + (V ? ' (bank by finance)' : ''), phase === 2, phase > 2)}${step('Approved', phase === 3 && p.status === 'active', p.status === 'active')}</ol>
     ${open.has('editparty') && d.edit ? html`<form class="form" data-form="editparty"><div class="grid2"><label>Name<input id="ep-name" value="${p.name}" /></label><label>GSTIN<input id="ep-gstin" value="${p.gstin ?? ''}" /></label><label>PAN<input id="ep-pan" value="${p.pan ?? ''}" /></label><label>City<input id="ep-city" value="${p.city ?? ''}" /></label>
-      <label>State<select id="ep-state">${opts(INDIAN_STATES.map((x) => ({ id: x, label: x })), p.state ?? '', 'Choose…')}</select></label><label>Phone<input id="ep-phone" value="${p.phone ?? ''}" /></label><label>Email<input id="ep-email" value="${p.email ?? ''}" /></label><label>Payment days<input id="ep-days" value="${p.payment_days ?? ''}" /></label>${!V ? html`<label>Customer type<select id="ep-type">${opts([{ id: 'distributor', label: 'Distributor' }, { id: 'retailer', label: 'Retailer' }], p.customer_type ?? 'retailer')}</select></label>` : ''}
+      <label>State<select id="ep-state">${opts(INDIAN_STATES.map((x) => ({ id: x, label: x })), p.state ?? '', 'Choose…')}</select></label><label>Phone<input id="ep-phone" value="${p.phone ?? ''}" /></label><label>Email<input id="ep-email" value="${p.email ?? ''}" /></label><label>Payment days<input id="ep-days" value="${p.payment_days ?? ''}" /></label>
       ${V || p.bank_account ? html`<label>Bank account <small>(blank = keep ${p.bank_account ?? 'none'})</small><input id="ep-bank" inputmode="numeric" /></label>` : ''}</div><label>Notes<input id="ep-notes" value="${p.notes ?? ''}" /></label>
       ${['active', 'suspended'].includes(p.status) ? html`<p class="sub">Changing the GSTIN or bank account sends this ${noun} back for checking until it is approved again.</p>` : ''}<div class="row"><button class="primary" type="submit">Save</button><button type="button" data-act="p-edit">Cancel</button></div></form>` : html`
     <div class="kvs"><div class="kv"><span>GSTIN</span><b>${p.gstin ?? '–'}</b></div><div class="kv"><span>PAN</span><b>${p.pan ?? '–'}</b></div><div class="kv"><span>Phone</span><b>${p.phone ?? '–'}</b></div><div class="kv"><span>Email</span><b>${p.email ?? '–'}</b></div>
-      <div class="kv"><span>Payment days</span><b>${p.payment_days ?? s.terms?.payment_days ?? '–'}</b></div>${V ? html`<div class="kv"><span>Bank account</span><b>${p.bank_account ?? '–'} ${p.bank_account ? (p.bank_verified_by ? chip('accepted', 'verified') : chip('held', 'not verified')) : ''}</b></div>` : html`<div class="kv"><span>Credit limit</span><b>${s.terms && Number(s.terms.credit_limit) ? money(s.terms.credit_limit) : 'none set'}</b></div>`}</div>${p.notes ? html`<p>${p.notes}</p>` : ''}`}
+      <div class="kv"><span>Payment days</span><b>${p.payment_days ?? '–'}</b></div>${V ? html`<div class="kv"><span>Bank account</span><b>${p.bank_account ?? '–'} ${p.bank_account ? (p.bank_verified_by ? chip('accepted', 'verified') : chip('held', 'not verified')) : ''}</b></div>` : ''}</div>${p.notes ? html`<p>${p.notes}</p>` : ''}`}
     <div class="row">${d.edit && !open.has('editparty') ? html`<button data-act="p-edit">Edit</button>` : ''}${p.status === 'draft' && d.submit ? html`<button class="primary" data-act="p-submit">Send for checking</button>` : ''}
       ${p.status === 'verification' && p.bank_account && !p.bank_verified_by && d.bankOk && !mine ? html`<button class="primary" data-act="p-bank">Verify bank account</button>` : ''}
       ${p.status === 'verification' && d.approve && !mine && (!p.bank_account || p.bank_verified_by) ? html`<button class="primary" data-act="p-approve">Approve</button>` : ''}
@@ -177,16 +178,14 @@ export async function partiesView(kind: 'vendor' | 'distributor' | 'retailer'): 
     ${V ? html`<h3>Price list</h3>${s.rates.length ? html`<table class="mini"><thead><tr><th>Material</th><th class="r">Price</th><th>From</th><th>Status</th><th></th></tr></thead><tbody>${s.rates.map((r: { id: string; item_code: string; item_name: string; rate: string; unit: string; min_qty: string; effective_from: string; status: string; proposed_by: string }) => html`<tr><td>${r.item_code}<br><small>${r.item_name}</small></td><td class="r">${money(r.rate)} / ${r.unit}${Number(r.min_qty) ? html`<br><small>from ${qty(r.min_qty)}</small>` : ''}</td><td>${dateOnly(String(r.effective_from).slice(0, 10))}</td><td>${r.status === 'approved' ? chip('approved') : r.status === 'superseded' ? chip('closed', 'old') : chip('proposed')}</td><td>${r.status === 'proposed' && d.rateApprove && !rateMine(r) ? html`<button class="sm" data-act="r-approve" data-id="${r.id}">Approve</button>` : ''}</td></tr>`)}</tbody></table>` : html`<p class="empty">No prices agreed yet.</p>`}
       ${d.ratePropose && p.status === 'active' ? html`<form class="row" data-form="addrate"><select id="rt-item">${opts(d.items.map((i) => ({ id: i.id, label: `${i.code} · ${i.name}` })))}</select><input id="rt-rate" inputmode="decimal" placeholder="Price" style="width:90px" required /><input id="rt-min" inputmode="decimal" placeholder="From qty" style="width:90px" /><input id="rt-from" type="date" value="${todayIso()}" /><button type="submit">Propose price</button></form><p class="sub">A different person approves each price. The old price ends the day before the new one starts.</p>` : ''}
       <h3>Purchase orders</h3>${s.pos.length ? html`<table class="mini"><tbody>${s.pos.map((o: { number: string; status: string; total: string }) => html`<tr><td>${o.number}</td><td class="r">${money(o.total)}</td><td>${chip(o.status)}</td></tr>`)}</tbody></table>` : html`<p class="empty">No orders placed yet.</p>`}`
-    : html`<h3>Sales orders</h3>${s.orders.length ? html`<table class="mini"><tbody>${s.orders.map((o: { number: string; status: string; total: string }) => html`<tr><td>${o.number}</td><td class="r">${money(o.total)}</td><td>${chip(o.status)}</td></tr>`)}</tbody></table>` : html`<p class="empty">No orders yet.</p>`}`}
+    : ''}
     <h3>History</h3><ul class="timeline">${s.history.map((h: { at: string; action: string; who: string; reason: string | null }) => html`<li><b>${h.action.replace('partner.', '').replace(/\./g, ' ')}</b> by ${h.who ?? 'system'} <small>${when(h.at)}${h.reason ? ' · ' + h.reason : ''}</small></li>`)}</ul>`
     : html`<p class="empty">Pick a ${noun} to see the details.</p>`}</div></section>`;
 }
 export const vendorsView = () => partiesView('vendor');
-export const distributorsView = () => partiesView('distributor');
-export const retailersView = () => partiesView('retailer');
 
 // ───────────────────────── events ─────────────────────────
-const roleNow = (): 'vendor' | 'distributor' | 'retailer' => ((S.view as string) === 'distributors' ? 'distributor' : (S.view as string) === 'retailers' ? 'retailer' : 'vendor');
+const roleNow = (): 'vendor' => 'vendor';
 const PARTY_FIELDS = (p: string) => ({ name: val(p + 'name') || undefined, gstin: val(p + 'gstin'), pan: val(p + 'pan'), city: val(p + 'city'), state: val(p + 'state'), phone: val(p + 'phone'), email: val(p + 'email') });
 
 export async function onClick(t: HTMLElement): Promise<boolean> {
@@ -250,12 +249,12 @@ export async function onSubmit(form: string, f?: HTMLElement, ev?: SubmitEvent):
     case 'newunit': { const r = await act('Unit added', (c) => admin.createUnit(c, { code: val('un-code').toUpperCase(), name: val('un-name'), precision: Number(val('un-prec')) })); if (r) await R.render(); return true; }
     case 'newparty': {
       const role = roleNow();
-      const r = await act(`${role === 'vendor' ? 'Vendor' : role === 'distributor' ? 'Distributor' : 'Retailer'} saved as a draft`, (c) => md.createParty(c, { ...PARTY_FIELDS('np-'), name: val('np-name'), role: role === 'vendor' ? 'vendor' : 'customer', customerType: role === 'vendor' ? undefined : role, paymentDays: val('np-days') ? Number(val('np-days')) : undefined, bankAccount: val('np-bank') || undefined, contact: val('np-cname') ? { name: val('np-cname'), phone: val('np-cphone') || undefined } : undefined, ...(val('nb-line') ? { billing: readAddr('nb-'), shippingSameAsBilling: (document.getElementById('ns-same') as HTMLInputElement).checked, shipping: (document.getElementById('ns-same') as HTMLInputElement).checked ? undefined : (val('ns-line') ? readAddr('ns-') : undefined) } : {}) }));
+      const r = await act('Vendor saved as a draft', (c) => md.createParty(c, { ...PARTY_FIELDS('np-'), name: val('np-name'), role, paymentDays: val('np-days') ? Number(val('np-days')) : undefined, bankAccount: val('np-bank') || undefined, contact: val('np-cname') ? { name: val('np-cname'), phone: val('np-cphone') || undefined } : undefined, ...(val('nb-line') ? { billing: readAddr('nb-'), shippingSameAsBilling: (document.getElementById('ns-same') as HTMLInputElement).checked, shipping: (document.getElementById('ns-same') as HTMLInputElement).checked ? undefined : (val('ns-line') ? readAddr('ns-') : undefined) } : {}) }));
       if (r) { open.delete('newparty'); st.sel[role] = r.id; await R.render(); } return true;
     }
     case 'editparty': {
       const v = await verOf('partner', sel());
-      const r = await act('Saved', (c) => md.updateParty(c, { partnerId: sel(), expectedVersion: v, ...PARTY_FIELDS('ep-'), paymentDays: val('ep-days') ? Number(val('ep-days')) : null, notes: val('ep-notes'), bankAccount: val('ep-bank'), customerType: (val('ep-type') || undefined) as 'distributor' | 'retailer' | undefined }));
+      const r = await act('Saved', (c) => md.updateParty(c, { partnerId: sel(), expectedVersion: v, ...PARTY_FIELDS('ep-'), paymentDays: val('ep-days') ? Number(val('ep-days')) : null, notes: val('ep-notes'), bankAccount: val('ep-bank') }));
       if (r) { open.delete('editparty'); if ((r as { sentBack?: boolean }).sentBack) toast('Sent back for checking because the GSTIN or bank account changed'); await R.render(); } return true;
     }
     case 'p-suspend': { const v = await verOf('partner', sel()); const r = await act('Suspended. No new orders can be raised', (c) => md.suspendParty(c, { partnerId: sel(), expectedVersion: v, reason: val('p-reason') })); if (r) { open.delete('suspend'); await R.render(); } return true; }

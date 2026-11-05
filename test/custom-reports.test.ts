@@ -4,10 +4,9 @@ import type { World } from '../src/seed/demo.js';
 import * as cr from '../src/domain/custom-reports.js';
 import * as ai from '../src/domain/ai.js';
 import { seedOwnerRecent } from '../src/seed/owner-demo.js';
-import { seedSalesBase, seedSalesFloor } from '../src/seed/sales-demo.js';
 
 let w: World;
-beforeAll(async () => { w = await freshWorld('customrep'); await seedSalesBase(w); await seedOwnerRecent(w); await seedSalesFloor(w); });
+beforeAll(async () => { w = await freshWorld('customrep'); await seedOwnerRecent(w); });
 afterAll(async () => { await w.pool.end(); });
 
 const run = (who: string, spec: unknown) => cr.runCustom(w.pool, w.actors[who], spec);
@@ -134,11 +133,8 @@ describe('the built-in reader is forgiving', () => {
     const e = await ask('own', 'show me all invoices outstanding payments').catch((x) => x);
     expect(e.message).toContain('not in the system yet');
     expect(e.message).toContain('purchase orders');
-    const f = await ask('buy', 'need all sale in last one year').catch((x) => x);       // a buyer has no sales rights
-    expect(f.message).toContain('do not have a role');
-    const g = await ask('slm', 'need all sale in last one yera');
-    expect(g.spec.dataset).toBe('sales_orders');
-    const run2 = await cr.runCustom(w.pool, w.actors.slm, g.spec);
-    expect(run2.rows.length).toBeGreaterThanOrEqual(0);
+    const f = await ask('own', 'need all sale in last one year').catch((x) => x);       // sales are kept in the CRM app
+    expect(f.message).toContain('CRM app');
+    expect(cr.DATASETS.some((d) => ['sales_orders', 'sales_lines', 'leads'].includes(d.key))).toBe(false);
   });
 });

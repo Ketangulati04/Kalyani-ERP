@@ -13,8 +13,6 @@ export const toCsv = (head: string[], rows: unknown[][]) => [head.join(','), ...
 export const SKU_CSV = 'style,size,colour_code,colour_name';
 export const HEADS = {
   vendors: { header: 'code,name,gstin,pan,city,state,phone,email,payment_days,contact_name,contact_phone', sample: ',Om Trims,24AAACO1111F1Z4,AAACO1111F,Surat,Gujarat,9824011122,orders@omtrims.example,30,Raju,9824011122' },
-  distributors: { header: 'code,name,gstin,pan,city,state,phone,email,payment_days,contact_name,contact_phone', sample: ',Metro Distributors,29AAACM5566E1Z9,AAACM5566E,Bengaluru,Karnataka,9900112233,anil@metro.example,45,Anil Kumar,9900112233' },
-  retailers: { header: 'code,name,gstin,pan,city,state,phone,email,payment_days,contact_name,contact_phone', sample: ',Style Corner,,,Pune,Maharashtra,9890011223,shop@stylecorner.example,15,Neha,9890011223' },
   materials: { header: 'code,type,name,description,hsn,gst,reorder_level,unit', sample: ',KNIT,Single jersey 180 GSM white,,6006,5,500,M' },
   finished: { header: 'code,type,name,description,hsn,gst,reorder_level,unit', sample: ',GARMENT,Basic tee white M,,6109,5,,PC' },
   skus: { header: SKU_CSV, sample: 'BRF-01,XXL,BLK,Black' },
@@ -22,8 +20,8 @@ export const HEADS = {
 export type Head = keyof typeof HEADS;
 
 export async function exportCsv(db: Db, userId: string, head: Head): Promise<{ csv: string; rows: number; file: string }> {
-  if (head === 'vendors' || head === 'distributors' || head === 'retailers') {
-    const list = await md.listParties(db, userId, head === 'vendors' ? { role: 'vendor' } : { role: 'customer', customerType: head === 'distributors' ? 'distributor' : 'retailer' });
+  if (head === 'vendors') {
+    const list = await md.listParties(db, userId, { role: 'vendor' });
     if (!list) throw badRequest('Your role cannot see this list');
     const ids = list.map((p) => p.id);
     const full = (await db.query('SELECT id, pan FROM partner WHERE id = ANY($1::uuid[])', [ids])).rows; const pan = new Map(full.map((r) => [r.id, r.pan]));

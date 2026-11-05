@@ -13,7 +13,7 @@ const st = {
   panel: null as null | { head: bulk.Head; mode: Mode }, rows: [] as string[][], text: '', res: null as Res | null, exp: null as null | { csv: string; rows: number; file: string },
   sku: { q: '', style: '', status: '' },
 };
-const LABEL: Record<bulk.Head, string> = { vendors: 'vendors', distributors: 'distributors', retailers: 'retailers', materials: 'materials', finished: 'finished goods', skus: 'SKUs' };
+const LABEL: Record<bulk.Head, string> = { vendors: 'vendors', materials: 'materials', finished: 'finished goods', skus: 'SKUs' };
 const cols = (h: bulk.Head) => bulk.HEADS[h].header.split(',').filter((c) => c !== 'code'); // the add-several grid never asks for a code
 const HINT: Record<string, string> = {
   name: 'Name', gstin: '29ABCDE1234F1Z5', pan: 'ABCDE1234F', city: 'City', state: 'State', phone: 'Phone', email: 'Email', payment_days: 'Days', contact_name: 'Contact', contact_phone: 'Contact phone',
@@ -62,7 +62,7 @@ function panel(h: bulk.Head, mode: Mode, canAdd: boolean): Raw {
 const reset = () => { st.rows = []; st.text = ''; st.res = null; st.exp = null; };
 async function run(h: bulk.Head, csv: string, dry: boolean) {
   try {
-    const r = await K.world.as(S.user, (c) => (h === 'skus' ? bulk.importSkus(c, csv, dry) : h === 'materials' || h === 'finished' ? md.importMaterials(c, csv, dry, h === 'finished' ? 'fg' : 'materials') : md.importParties(c, csv, dry, h === 'vendors' ? 'vendor' : h === 'distributors' ? 'distributor' : 'retailer'))) as Res;
+    const r = await K.world.as(S.user, (c) => (h === 'skus' ? bulk.importSkus(c, csv, dry) : h === 'materials' || h === 'finished' ? md.importMaterials(c, csv, dry, h === 'finished' ? 'fg' : 'materials') : md.importParties(c, csv, dry, 'vendor'))) as Res;
     st.res = r;
     if (!dry && !r.errors.length) { toast(`${LABEL[h]}: ${[r.created && r.created + ' added', r.updated && r.updated + ' changed'].filter(Boolean).join(', ') || 'no changes'}`); st.rows = blankRows(h); st.text = ''; }
   } catch (e) { toast((e as Error).message, 'bad'); }

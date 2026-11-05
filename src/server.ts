@@ -16,7 +16,6 @@ import * as bulk from './domain/bulk.js';
 import * as plan from './domain/planning.js';
 import * as prod from './domain/production.js';
 import { startDailyPlan } from './jobs/daily-plan.js';
-import * as sales from './domain/sales.js';
 import * as prefs from './domain/prefs.js';
 import * as admin from './domain/admin.js';
 import * as masters from './domain/masters.js';
@@ -98,14 +97,6 @@ export async function buildServer(pool: Pool): Promise<FastifyInstance> {
   app.get('/api/me/preferences', read((db, a) => prefs.getPreferences(db, a.id)));
   cmd('/api/me/preferences', 'user.preferences', z.object({ theme: z.string().optional(), accent: z.string().optional(), layout: z.string().optional(), density: z.string().optional(), reset: z.boolean().optional() }),
     (c, b) => prefs.setPreferences(c, b.reset ? { reset: true } : (b as never)));
-  // ── CRM and sales ──
-  const slines = z.array(z.object({ itemId: id, qty: z.string(), rate: z.string(), discPct: z.string().optional() })).min(1);
-  app.get('/api/crm/leads', read(async (db, a) => { const r = await sales.listLeads(db, a.id); if (!r) throw forbidden('Not permitted: crm.view'); return r; }));
-  app.get('/api/crm/leads/:id', read((db, a, r) => sales.getLead(db, a.id, (r.params as { id: string }).id)));
-  cmd('/api/crm/leads', 'crm.lead.create', z.object({ name: z.string(), company: z.string().optional(), phone: z.string().optional(), email: z.string().optional(), source: z.string().optional(), interest: z.string().optional(), estValue: z.string().optional(), nextFollowUp: z.string().optional() }), (c, b) => sales.createLead(c, b), true);
-  cmd('/api/crm/leads/:id/status', 'crm.lead.status', z.object({ status: z.string(), reason: z.string().optional(), expectedVersion: ver }), (c, b, p) => sales.setLeadStatus(c, { leadId: p.id, ...b }));
-  cmd('/api/crm/activities', 'crm.activity', z.object({ leadId: id.optional(), customerId: id.optional(), kind: z.string(), summary: z.string(), dueDate: z.string().optional() }), (c, b) => sales.addActivity(c, b), true);
-  cmd('/api/crm/activities/:id/done', 'crm.activity.done', z.object({ outcome: z.string().optional() }), (c, b, p) => sales.completeActivity(c, { activityId: p.id, outcome: b.outcome }));
   // Master data
   const qs = (r: { query: unknown }) => r.query as Record<string, string | undefined>;
   app.get('/api/material-types', read((db, a) => mdata.listMaterialTypes(db, a.id)));
@@ -114,9 +105,9 @@ export async function buildServer(pool: Pool): Promise<FastifyInstance> {
   cmd('/api/material-types', 'mtype.manage', z.object({ code: z.string(), name: z.string(), kind: z.string(), defaultUnit: z.string(), tracking: z.string().optional(), prefix: z.string().optional(), attrs: z.array(z.object({ key: z.string(), label: z.string(), type: z.enum(['number', 'text']), unit: z.string().optional(), required: z.boolean().optional() })).optional() }), (c, b) => mdata.createMaterialType(c, b), true);
   cmd('/api/materials', 'item.create', z.object({ typeId: id, name: z.string(), code: z.string().optional(), unit: z.string().optional(), description: z.string().optional(), hsnCode: z.string().optional(), gstRate: z.string().optional(), reorderLevel: z.string().optional(), attributes: z.record(z.string(), z.unknown()).optional() }), (c, b) => mdata.createMaterial(c, b), true);
   cmd('/api/materials/import', 'item.create', z.object({ csv: z.string(), dryRun: z.boolean().optional() }), (c, b) => mdata.importMaterials(c, b.csv, b.dryRun));
-  app.get('/api/parties', read((db, a, r) => mdata.listParties(db, a.id, { role: qs(r).role === 'customer' ? 'customer' : 'vendor', q: qs(r).q, status: qs(r).status })));
+  app.get('/api/parties', read((db, a, r) => mdata.listParties(db, a.id, { role: 'vendor', q: qs(r).q, status: qs(r).status })));
   app.get('/api/parties/:id', read((db, a, r) => mdata.getParty(db, a.id, (r.params as { id: string }).id)));
-  cmd('/api/parties', 'partner.create', z.object({ name: z.string(), role: z.enum(['vendor', 'customer', 'both', 'subcontractor']), customerType: z.enum(['distributor', 'retailer']).optional(), gstin: z.string().optional(), pan: z.string().optional(), city: z.string().optional(), state: z.string().optional(), phone: z.string().optional(), email: z.string().optional(), paymentDays: z.number().int().optional(), bankAccount: z.string().optional(), billing: z.object({ label: z.string().optional(), line1: z.string(), line2: z.string().optional(), city: z.string().optional(), state: z.string().optional(), pincode: z.string().optional(), contactName: z.string().optional(), phone: z.string().optional(), gstin: z.string().optional() }).optional(), shipping: z.object({ label: z.string().optional(), line1: z.string(), line2: z.string().optional(), city: z.string().optional(), state: z.string().optional(), pincode: z.string().optional(), contactName: z.string().optional(), phone: z.string().optional(), gstin: z.string().optional() }).optional(), shippingSameAsBilling: z.boolean().optional() }), (c, b) => mdata.createParty(c, b), true);
+  cmd('/api/parties', 'partner.create', z.object({ name: z.string(), role: z.enum(['vendor', 'subcontractor']), gstin: z.string().optional(), pan: z.string().optional(), city: z.string().optional(), state: z.string().optional(), phone: z.string().optional(), email: z.string().optional(), paymentDays: z.number().int().optional(), bankAccount: z.string().optional(), billing: z.object({ label: z.string().optional(), line1: z.string(), line2: z.string().optional(), city: z.string().optional(), state: z.string().optional(), pincode: z.string().optional(), contactName: z.string().optional(), phone: z.string().optional(), gstin: z.string().optional() }).optional(), shipping: z.object({ label: z.string().optional(), line1: z.string(), line2: z.string().optional(), city: z.string().optional(), state: z.string().optional(), pincode: z.string().optional(), contactName: z.string().optional(), phone: z.string().optional(), gstin: z.string().optional() }).optional(), shippingSameAsBilling: z.boolean().optional() }), (c, b) => mdata.createParty(c, b), true);
   cmd('/api/parties/:id/addresses', 'partner.edit', z.object({ label: z.string().optional(), line1: z.string(), line2: z.string().optional(), city: z.string().optional(), state: z.string().optional(), pincode: z.string().optional(), contactName: z.string().optional(), phone: z.string().optional(), gstin: z.string().optional(), kind: z.enum(['registered', 'billing', 'shipping', 'works']), makeDefault: z.boolean().optional() }), (c, b, p) => mdata.addAddress(c, { ...b, partnerId: p.id }), true);
   cmd('/api/addresses/:id/update', 'partner.edit', z.object({ label: z.string().optional(), line1: z.string(), line2: z.string().optional(), city: z.string().optional(), state: z.string().optional(), pincode: z.string().optional(), contactName: z.string().optional(), phone: z.string().optional(), gstin: z.string().optional() }), (c, b, p) => mdata.updateAddress(c, { ...b, addressId: p.id }));
   cmd('/api/addresses/:id/default', 'partner.edit', none, (c, _b, p) => mdata.setDefaultAddress(c, { addressId: p.id }));
@@ -137,25 +128,6 @@ export async function buildServer(pool: Pool): Promise<FastifyInstance> {
   app.get('/api/agent/capabilities', read((db, a) => agent.capabilities(db, a.id)));
   app.post('/api/agent/chat', read(async (db, a, r) => { const b = z.object({ text: z.string().max(500), history: z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string().max(500) })).max(10).optional() }).parse(r.body ?? {}); return agent.chat(db, a.id, b.text, b.history ?? []); }));
   cmd('/api/agent/confirm', 'assistant.confirm', z.object({ tool: z.string(), args: z.record(z.string(), z.string()), title: z.string().max(200), details: z.array(z.string()).max(10).optional() }), async (c, b) => ({ message: await agent.executeProposal(c, { tool: b.tool, args: b.args, title: b.title, details: b.details ?? [] }) }));
-  app.get('/api/customers', read((db, a) => sales.listCustomers(db, a.id)));
-  cmd('/api/customers/:id/terms', 'customer.terms', z.object({ creditLimit: z.string(), paymentDays: z.number().int().optional() }), (c, b, p) => sales.setCreditTerms(c, { partnerId: p.id, ...b }));
-  app.get('/api/quotes', read((db, a) => sales.listQuotes(db, a.id)));
-  app.get('/api/quotes/:id', read((db, a, r) => sales.getQuote(db, a.id, (r.params as { id: string }).id)));
-  cmd('/api/quotes', 'quote.create', z.object({ siteId: id, customerId: id, leadId: id.optional(), validUntil: z.string().optional(), lines: slines, notes: z.string().optional() }), (c, b) => sales.createQuote(c, b), true);
-  cmd('/api/quotes/:id/send', 'quote.send', ev, (c, b, p) => sales.sendQuote(c, { quoteId: p.id, ...b }));
-  cmd('/api/quotes/:id/decide', 'quote.decide', z.object({ expectedVersion: ver, accepted: z.boolean(), reason: z.string().optional() }), (c, b, p) => sales.decideQuote(c, { quoteId: p.id, ...b }));
-  cmd('/api/quotes/:id/cancel', 'quote.cancel', z.object({ expectedVersion: ver, reason: z.string() }), (c, b, p) => sales.cancelQuote(c, { quoteId: p.id, ...b }));
-  app.get('/api/sales/orders', read((db, a) => sales.listOrders(db, a.id)));
-  app.get('/api/sales/orders/:id', read((db, a, r) => sales.getOrder(db, a.id, (r.params as { id: string }).id)));
-  app.get('/api/sales/lines/:id/stock', read((db, a, r) => sales.stockForLine(db, a.id, (r.params as { id: string }).id)));
-  app.get('/api/sales/summary', read((db, a) => sales.salesSummary(db, a.id)));
-  cmd('/api/sales/orders', 'so.create', z.object({ siteId: id, customerId: id.optional(), quoteId: id.optional(), dueDate: z.string().optional(), lines: slines.optional() }), (c, b) => sales.createOrder(c, b), true);
-  cmd('/api/sales/orders/:id/submit', 'so.submit', ev, (c, b, p) => sales.submitOrder(c, { orderId: p.id, ...b }));
-  cmd('/api/sales/orders/:id/approve', 'so.approve', ev, (c, b, p) => sales.approveOrder(c, { orderId: p.id, ...b }));
-  cmd('/api/sales/orders/:id/return', 'so.return', z.object({ expectedVersion: ver, reason: z.string() }), (c, b, p) => sales.returnOrder(c, { orderId: p.id, ...b }));
-  cmd('/api/sales/orders/:id/cancel', 'so.cancel', z.object({ expectedVersion: ver, reason: z.string() }), (c, b, p) => sales.cancelOrder(c, { orderId: p.id, ...b }));
-  cmd('/api/sales/orders/:id/allocate', 'so.allocate', z.object({ lineId: id, lotId: id, qty: z.string() }), (c, b, p) => sales.allocate(c, { orderId: p.id, ...b }));
-  cmd('/api/sales/orders/:id/dispatch', 'so.dispatch', z.object({ vehicleNo: z.string().optional(), lrNo: z.string().optional(), lines: z.array(z.object({ lineId: id, lotId: id, locationId: id, qty: z.string() })).min(1) }), (c, b, p) => sales.dispatch(c, { orderId: p.id, ...b }), true);
   // ── barcodes: read a scanned code, list labels to print, move a roll forward ──
   app.get('/api/scan', read((db, a, req) => barcode.resolveScan(db, a.id, String((req.query as { code?: string }).code ?? ''))));
   app.get('/api/labels', read((db, a) => barcode.labelData(db, a.id)));
@@ -273,13 +245,12 @@ export async function buildServer(pool: Pool): Promise<FastifyInstance> {
   cmd('/api/packs/:id/status', 'pack.status', z.object({ status: z.enum(['active', 'inactive']) }), (c, b, p) => bom.setPackStatus(c, { packId: p.id, status: b.status }));
 
   // ── master lists: export and import (CSV in the same columns both ways) ──
-  const headEnum = z.enum(['vendors', 'distributors', 'retailers', 'materials', 'finished', 'skus']);
+  const headEnum = z.enum(['vendors', 'materials']);
   app.get('/api/export/:head', read((db, a, r) => bulk.exportCsv(db, a.id, headEnum.parse((r.params as { head: string }).head))));
   cmd('/api/import/:head', 'master.import', z.object({ csv: z.string().max(2_000_000), dryRun: z.boolean().optional() }), (c, b, p) => {
     const h = headEnum.parse(p.head);
-    if (h === 'skus') return bulk.importSkus(c, b.csv, !!b.dryRun);
-    if (h === 'materials' || h === 'finished') return mdata.importMaterials(c, b.csv, !!b.dryRun, h === 'finished' ? 'fg' : 'materials');
-    return mdata.importParties(c, b.csv, !!b.dryRun, h === 'vendors' ? 'vendor' : h === 'distributors' ? 'distributor' : 'retailer');
+    if (h === 'materials') return mdata.importMaterials(c, b.csv, !!b.dryRun, 'materials');
+    return mdata.importParties(c, b.csv, !!b.dryRun, 'vendor');
   });
 
   // ── production planning ──

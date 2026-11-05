@@ -3,7 +3,6 @@ import { freshWorld } from './helpers.js';
 import type { World } from '../src/seed/demo.js';
 import * as md from '../src/domain/master-data.js';
 import * as bulk from '../src/domain/bulk.js';
-import { seedSalesBase } from '../src/seed/sales-demo.js';
 import { seedMastersDemo } from '../src/seed/masters-demo.js';
 
 async function rejects(p: Promise<unknown>, part: string) {
@@ -15,32 +14,17 @@ async function rejects(p: Promise<unknown>, part: string) {
   throw new Error(`Expected a refusal containing "${part}" but it succeeded`);
 }
 let w: World;
-beforeAll(async () => { w = await freshWorld('bulk'); await seedSalesBase(w); await seedMastersDemo(w, true); });
+beforeAll(async () => { w = await freshWorld('bulk'); await seedMastersDemo(w); });
 afterAll(async () => { await w.pool.end(); });
 const uid = (u: string) => w.actors[u].id;
 
-describe('distributors and retailers', () => {
-  it('splits customers by type and keeps old customers as retailers', async () => {
-    const d = await md.listParties(w.pool, uid('sal'), { role: 'customer', customerType: 'distributor' });
-    const r = await md.listParties(w.pool, uid('sal'), { role: 'customer', customerType: 'retailer' });
-    expect(d!.map((x) => x.name)).toEqual(expect.arrayContaining(['Metro Innerwear']));
-    expect(r!.some((x) => x.code === 'C-001')).toBe(true);
-    expect(d!.some((x) => x.code === 'C-001')).toBe(false);
-    const p = await w.as('sal', (c) => md.createParty(c, { name: 'Tiny Shop', role: 'customer' }));
-    expect(p.customer_type).toBe('retailer');
-    await rejects(w.as('sal', (c) => md.createParty(c, { name: 'Odd Shop', role: 'customer', customerType: 'wholesaler' as never })), 'distributor or retailer');
-  });
-});
-
 describe('import and export', () => {
   it('importing the export of a list changes nothing and creates nothing', async () => {
-    for (const head of ['vendors', 'distributors', 'retailers', 'materials', 'finished'] as const) {
-      const { csv, rows } = await bulk.exportCsv(w.pool, uid('md'), head).catch(() => bulk.exportCsv(w.pool, uid('sal'), head));
+    for (const head of ['vendors', 'materials', 'finished'] as const) {
+      const { csv, rows } = await bulk.exportCsv(w.pool, uid('md'), head);
       expect(rows, head).toBeGreaterThan(0);
-      const scope = head === 'vendors' ? 'vendor' : head === 'distributors' ? 'distributor' : head === 'retailers' ? 'retailer' : undefined;
-      const act = head === 'vendors' || head === 'distributors' || head === 'retailers' ? 'buy' : 'md';
-      const who = head === 'distributors' || head === 'retailers' ? 'sal' : act;
-      const r = await w.as(who, (c) => (scope ? md.importParties(c, csv, true, scope) : md.importMaterials(c, csv, true, head === 'finished' ? 'fg' : 'materials')));
+      const who = head === 'vendors' ? 'buy' : 'md';
+      const r = await w.as(who, (c) => (head === 'vendors' ? md.importParties(c, csv, true, 'vendor') : md.importMaterials(c, csv, true, head === 'finished' ? 'fg' : 'materials')));
       expect(r.errors, head).toEqual([]);
       expect(r.created, head).toBe(0);
       expect(r.updated, head).toBe(rows);
@@ -56,12 +40,10 @@ describe('import and export', () => {
     expect(r2.errors.length).toBeGreaterThan(0);
     expect((await w.pool.query(`SELECT 1 FROM partner WHERE name='Om Trims Two'`)).rowCount).toBe(0);
   });
-  it('keeps distributors, retailers and vendors in their own lists', async () => {
-    const wrong = await w.as('sal', (c) => md.importParties(c, 'name,role\nX Co,vendor\n', true, 'retailer'));
-    expect(wrong.errors[0].message).toContain('retailers only');
-    const ok = await w.as('sal', (c) => md.importParties(c, 'name,role\nBig Dist,distributor\nLittle Shop,retailer\n', false, undefined));
-    expect(ok.created).toBe(2);
-    expect((await md.listParties(w.pool, uid('sal'), { role: 'customer', customerType: 'distributor' }))!.some((x) => x.name === 'Big Dist')).toBe(true);
+  it('the vendor list refuses distributors and retailers: they are kept in the CRM app', async () => {
+    const wrong = await w.as('buy', (c) => md.importParties(c, 'name,role\nBig Dist,distributor\nLittle Shop,retailer\n', true));
+    expect(wrong.errors.map((e) => e.row)).toEqual([2, 3]); expect(wrong.errors[0].message).toContain('CRM app');
+    expect(Object.keys(bulk.HEADS)).not.toContain('distributors'); expect(Object.keys(bulk.HEADS)).not.toContain('retailers');
   });
   it('finished goods list takes finished-goods types only, materials list refuses them', async () => {
     const fg = await w.as('md', (c) => md.importMaterials(c, 'type,name,hsn,gst,unit,attr_size,attr_colour\nGARMENT,Basic tee black M,6109,5,PC,M,Black\n', false, 'fg'));
