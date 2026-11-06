@@ -1,6 +1,6 @@
 // Finished goods, the same article master as the CRM app, and the Brand, Category and Colour masters it uses.
 import { html, raw, money, chip, esc, type Raw } from './lib.js';
-import { uid, read, val, act, head, denied, R, opts, toast } from './ctx.js';
+import { uid, read, val, act, head, denied, R, opts, toast, kv } from './ctx.js';
 import * as bom from '../src/domain/bom.js';
 import * as cat from '../src/domain/catalog.js';
 import { can } from '../src/core/permissions.js';
@@ -73,17 +73,19 @@ export async function finishedView(): Promise<Raw> {
     <select id="ct-fc" aria-label="Category">${opts(d.cats.map((c) => ({ id: c.id, label: c.name })), f.cat, 'All categories')}</select>
     <select id="ct-fs" aria-label="Status">${opts(Object.keys(cat.ARTICLE_STATUS).map((s) => ({ id: s, label: STATUS_LABEL[s] })), f.status, 'Any status')}</select></div>`;
   const table = list.length ? html`<div class="scroll"><table class="mini"><thead><tr><th>Article</th><th>Brand · category</th><th>Colours</th><th>Cup</th><th>Sizes</th><th>Packing</th>
-      <th class="r">Rate / pc</th><th class="r">Rate / pack</th><th class="r">MRP / pc</th><th class="r">MRP / pack</th><th class="r">SKUs</th><th>Status</th></tr></thead><tbody>${list.map((x) => {
+      <th class="r">Rate / pc</th><th class="r">Rate / pack</th><th class="r">MRP / pc</th><th class="r">MRP / pack</th><th class="r">SKUs</th><th>Status</th><th></th></tr></thead><tbody>${list.map((x) => {
       const pk = x.pcs_per_pack > 1;
       return html`<tr class="pick ${x.id === st.sel ? 'on' : ''}" tabindex="0" data-act="ct-pick" data-id="${x.id}"><td><b class="mono">${x.code}</b><br>${x.name}<br><small>HSN ${x.hsn_code ?? '–'}${x.commodity ? ' · ' + x.commodity : ''}</small></td>
         <td>${x.brand ?? '–'}<br><small>${x.category_name ?? x.category ?? '–'}</small></td><td>${(x.colours as { name: string }[]).map((c) => c.name).join(', ')}</td><td>${(x.cups as string[]).join(', ') || '–'}</td>
         <td>${sizesText(x.sizes)}</td><td>${x.packing}</td><td class="r">${rs(x.rate)}</td><td class="r">${pk && x.rate ? money(String(Number(x.rate) * x.pcs_per_pack)) : '–'}</td>
         <td class="r"><b>${rs(x.mrp)}</b></td><td class="r">${pk && x.mrp ? money(String(Number(x.mrp) * x.pcs_per_pack)) : '–'}</td>
-        <td class="r">${x.n_skus}<br><small title="Barcodes made: piece and box">▥ ${x.n_piece_bc} · box ${x.n_box_bc}</small></td><td>${sChip(x.status)}</td></tr>`;
+        <td class="r">${x.n_skus}<br><small title="Barcodes made: piece and box">▥ ${x.n_piece_bc} · box ${x.n_box_bc}</small></td><td>${sChip(x.status)}</td>
+        <td class="r"><button class="sm" data-act="ct-view" data-id="${x.id}">View</button>${d.create ? html` <button class="sm" data-act="ct-editrow" data-id="${x.id}">Edit</button>` : ''}</td></tr>`;
     })}</tbody></table></div>` : html`<p class="empty">No articles match.</p>`;
   return html`${head('Finished goods', 'Every article: brand, category, colours, cups, sizes, packing, rate and MRP, HSN, status and barcodes. Articles are added and changed here; the CRM app uses the same list.', d.create ? html`<button class="primary" data-act="ct-new">New article</button>` : undefined)}
   ${bulkBar('skus', d.create)}${tiles}${st.form === 'new' && d.create ? articleForm(d, null) : ''}
-  <section class="card">${filters}${table}</section>${d.sel ? detail(d, d.sel) : ''}`;
+  ${d.sel ? detail(d, d.sel, d.list.find((x) => x.id === st.sel)!) : ''}
+  <section class="card">${filters}${table}</section>`;
 }
 
 type FD = { brands: Row[]; cats: Row[]; colours: Row[] };
@@ -116,15 +118,26 @@ function articleForm(d: FD, s: Row | null): Raw {
     <div class="row"><button class="primary" type="submit">Save article</button><button type="button" data-act="ct-cancel">Cancel</button></div></form>`;
 }
 
-function detail(d: FD & { create: boolean }, sel: Awaited<ReturnType<typeof bom.getStyle>>): Raw {
+/** Everything about one article, shown above the list: its details, then every SKU with its barcodes. */
+function detail(d: FD & { create: boolean }, sel: Awaited<ReturnType<typeof bom.getStyle>>, row: Row): Raw {
   const s = sel.style as Row; const pk = s.pcs_per_pack > 1;
   const colName = new Map((s.colours as { code: string; name: string }[]).map((c) => [c.code, c.name]));
   const missing = (s.colours as unknown[]).length * Math.max(1, (s.cups as string[]).length) * (s.sizes as string[]).length - sel.skus.length;
   const noBc = sel.skus.filter((k: Row) => !k.ean_piece || !k.ean_box).length;
-  if (st.form === 'edit' && d.create) return articleForm(d, s);
-  return html`<section class="card"><div class="row between"><h2>${s.code} · ${s.name} ${sChip(s.status)}</h2>
-    ${d.create ? html`<div class="row"><button data-act="ct-edit-art">Change article</button>${missing > 0 && s.status !== 'disable' ? html`<button data-act="ct-skus">Make ${missing} missing SKU${missing === 1 ? '' : 's'}</button>` : ''}${noBc ? html`<button data-act="ct-bc">Make missing barcodes</button>` : ''}</div>` : ''}</div>
-    <p class="sub">${cat.ARTICLE_STATUS[s.status]}. ${s.packing}${pk ? ` (${s.pcs_per_pack} pcs)` : ''} · rate ${rs(s.rate)} · MRP ${rs(s.mrp)} a piece${s.launched_on ? ` · launched ${s.launched_on}` : ''}</p>
+  if (st.form === 'edit' && d.create) return html`<div id="ct-detail">${articleForm(d, s)}</div>`;
+  const pack = (v: unknown) => (pk && v ? money(String(Number(v) * s.pcs_per_pack)) : '–');
+  const info = html`<div class="kvs">${kv('Brand', row.brand ?? '–')}${kv('Category', row.category_name ?? s.category ?? '–')}${kv('HSN code', s.hsn_code ?? '–')}${kv('Commodity type', s.commodity ?? '–')}
+    ${kv('GST', s.gst_rate != null ? `${Number(s.gst_rate)} %` : '–')}${kv('Packing', pk ? `${s.packing} (${s.pcs_per_pack} pcs)` : s.packing)}
+    ${kv('Rate per piece', rs(s.rate))}${kv('Rate per pack', pack(s.rate))}${kv('MRP per piece', rs(s.mrp))}${kv('MRP per pack', pack(s.mrp))}
+    ${kv('Colours', (s.colours as { code: string; name: string }[]).map((c) => `${c.name} (${c.code})`).join(', ') || '–')}${kv('Cups', (s.cups as string[]).join(', ') || 'None')}
+    ${kv('Sizes', (s.sizes as string[]).join(', '))}${kv('Launched on', s.launched_on ? String(s.launched_on).slice(0, 10) : '–')}
+    ${kv('BOM', row.active_version ? `Version ${row.active_version} in use` : row.open_status ? `Being prepared (${row.open_status})` : 'None yet')}${kv('Added by', sel.style.creator ?? '–')}</div>
+    ${s.description ? html`<p>${s.description}</p>` : ''}`;
+  return html`<section class="card" id="ct-detail"><div class="row between"><h2>${s.code} · ${s.name} ${sChip(s.status)}</h2>
+    <div class="row">${d.create ? html`<button class="primary" data-act="ct-edit-art">Edit article</button>` : ''}<button data-act="ct-close">Close</button></div></div>
+    ${info}${d.create ? '' : html`<p class="sub">Only the master-data steward or the engineer can change articles.</p>`}
+    ${d.create ? html`<div class="row">${missing > 0 && s.status !== 'disable' ? html`<button data-act="ct-skus">Make ${missing} missing SKU${missing === 1 ? '' : 's'}</button>` : ''}${noBc ? html`<button data-act="ct-bc">Make missing barcodes</button>` : ''}</div>` : ''}
+    <p class="sub">Status: ${STATUS_LABEL[s.status]} — ${cat.ARTICLE_STATUS[s.status]}.</p>
     <h3>SKUs and barcodes</h3><p class="sub">Every SKU has a piece barcode and a box barcode${pk ? ` (the box of ${s.pcs_per_pack})` : ''}, made automatically: EAN-13 under the GS1 prefix ${cat.EAN_PREFIX.slice(0, 3)} ${cat.EAN_PREFIX.slice(3)} (a sample prefix until yours is set), never repeated. To use a label that is already printed, scan or type its barcode over the one shown. For many at once, use the SKU CSV above.</p>
     ${sel.skus.length ? html`<div class="scroll"><table class="mini"><thead><tr><th>Colour</th><th>Cup</th><th>Size</th><th>SKU</th><th>Piece barcode</th><th>Box barcode</th><th>Stock item</th></tr></thead><tbody>${sel.skus.map((k: Row) => html`<tr>
       <td>${colName.get(k.colour_code) ?? k.colour_code}</td><td>${k.cup || '–'}</td><td>${k.size}</td><td class="mono">${k.code}</td>
@@ -135,6 +148,8 @@ function detail(d: FD & { create: boolean }, sel: Awaited<ReturnType<typeof bom.
 }
 
 // ───────────────────────── events ─────────────────────────
+/** Bring the open article (details or edit form) into view. */
+const toDetail = () => requestAnimationFrame(() => document.getElementById('ct-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 const checks = (name: string) => [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((e) => (e as HTMLInputElement).value);
 const capture = () => {
   document.querySelectorAll('form[data-form=ct-article] input[id], form[data-form=ct-article] select[id]').forEach((e) => { const i = e as HTMLInputElement; st.draft[i.id] = i.value; });
@@ -154,9 +169,11 @@ export async function onClick(t: HTMLElement): Promise<boolean> {
       await act(to === 'off' ? 'Switched off' : 'Switched on', (c) => cat.updateMaster(c, k, { id: rid, expectedVersion: v, active: to === 'on' })); return true;
     }
     case 'ct-new': st.form = st.form === 'new' ? '' : 'new'; st.draft = {}; return done();
-    case 'ct-cancel': st.form = ''; st.draft = {}; return done();
-    case 'ct-pick': st.sel = st.sel === id ? '' : id; if (st.form === 'edit') st.form = ''; return done();
-    case 'ct-edit-art': st.form = 'edit'; st.draft = {}; return done();
+    case 'ct-cancel': st.form = ''; st.draft = {}; await R.render(); toDetail(); return true;
+    case 'ct-pick': case 'ct-view': st.sel = a === 'ct-pick' && st.sel === id ? '' : id; if (st.form === 'edit') st.form = ''; await R.render(); toDetail(); return true;
+    case 'ct-editrow': st.sel = id; st.form = 'edit'; st.draft = {}; await R.render(); toDetail(); return true;
+    case 'ct-edit-art': st.form = 'edit'; st.draft = {}; await R.render(); toDetail(); return true;
+    case 'ct-close': st.sel = ''; if (st.form === 'edit') st.form = ''; return done();
     case 'ct-skus': { const r = await act('SKUs made', (c) => bom.createSkus(c, { styleId: st.sel })); if (r) toast(`${r.created} SKU${r.created === 1 ? '' : 's'} and ${r.barcodes} barcode${r.barcodes === 1 ? '' : 's'} made`); return true; }
     case 'ct-bc': { const r = await act('Barcodes made', (c) => cat.fillEans(c, st.sel)); if (r) toast(`${r.made} barcode${r.made === 1 ? '' : 's'} made`); return true; }
   }
@@ -185,7 +202,7 @@ export async function onSubmit(form: string, f?: HTMLElement): Promise<boolean> 
   }
   const v = await verOf('product_style', sid); const status = (val('ct-status') || undefined) as 'active' | 'close' | 'disable' | undefined;
   const r = await act('Article saved', async (c) => { const s = await bom.updateStyle(c, { styleId: sid, expectedVersion: v, ...fields, status }); if (s.status !== 'disable') await bom.createSkus(c, { styleId: sid }); return s; });
-  if (r) { st.form = ''; st.draft = {}; await R.render(); } return true;
+  if (r) { st.form = ''; st.draft = {}; await R.render(); toDetail(); } return true;
 }
 
 export async function onChange(t: HTMLInputElement): Promise<boolean> {
