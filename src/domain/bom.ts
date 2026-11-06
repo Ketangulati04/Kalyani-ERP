@@ -83,7 +83,7 @@ async function articleFields(db: Db, i: ArticleInput & { hsnCode?: string; gstRa
 }
 
 export async function createStyle(ctx: Ctx, i: ArticleInput & { code: string; name: string; category?: string; description?: string; hsnCode?: string; gstRate?: string; sizes: string[]; colours: (Colour | { code: string; name?: string } | string)[] }) {
-  await assertCan(ctx.db, ctx.actor.id, 'bom.create', ANY);
+  await assertCan(ctx.db, ctx.actor.id, 'article.edit', ANY);
   const code = (i.code ?? '').trim().toUpperCase();
   if (!/^[A-Z0-9][A-Z0-9-]{1,15}$/.test(code)) throw badRequest('Article code: 2 to 16 capital letters, digits or dashes, like KL-101');
   if (!i.name?.trim()) throw badRequest('Give the article a name');
@@ -107,7 +107,7 @@ export async function createStyle(ctx: Ctx, i: ArticleInput & { code: string; na
  * A size, colour or cup can only be dropped when no SKU and no BOM line uses it. New ones get their SKUs and barcodes made.
  */
 export async function updateStyle(ctx: Ctx, i: ArticleInput & { styleId: string; expectedVersion: number; name?: string; category?: string; description?: string; hsnCode?: string; gstRate?: string; sizes?: string[]; colours?: (Colour | { code: string; name?: string } | string)[]; status?: 'active' | 'close' | 'disable' }) {
-  await assertCan(ctx.db, ctx.actor.id, 'bom.create', ANY);
+  await assertCan(ctx.db, ctx.actor.id, 'article.edit', ANY);
   const s = (await ctx.db.query('SELECT * FROM product_style WHERE id=$1 FOR UPDATE', [i.styleId])).rows[0];
   if (!s) throw notFound('Article');
   if (s.version !== i.expectedVersion) throw staleVersion(i.expectedVersion, s.version);
@@ -148,7 +148,7 @@ export async function updateStyle(ctx: Ctx, i: ArticleInput & { styleId: string;
 
 /** Make the SKUs: one per chosen colour · cup · size. Existing ones are left alone. Each new SKU gets its piece (and box) barcode. */
 export async function createSkus(ctx: Ctx, i: { styleId: string; combos?: { size: string; colour: string; cup?: string }[] }) {
-  await assertCan(ctx.db, ctx.actor.id, 'bom.create', ANY);
+  await assertCan(ctx.db, ctx.actor.id, 'article.edit', ANY);
   const s = (await ctx.db.query('SELECT * FROM product_style WHERE id=$1 FOR UPDATE', [i.styleId])).rows[0];
   if (!s) throw notFound('Article');
   if (s.status === 'disable') throw invalidState(`${s.code} is disabled. Make it active first`);

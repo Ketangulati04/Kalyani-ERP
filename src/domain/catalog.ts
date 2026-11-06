@@ -125,7 +125,7 @@ async function nextEan(db: Db) {
 
 /** Give every SKU of an article that is missing one a piece barcode and a box barcode (the box or pack the piece is sold in). */
 export async function fillEans(ctx: Ctx, styleId: string) {
-  await assertCan(ctx.db, ctx.actor.id, 'bom.create', ANY);
+  await assertCan(ctx.db, ctx.actor.id, 'article.edit', ANY);
   const s = (await ctx.db.query('SELECT id, code FROM product_style WHERE id=$1', [styleId])).rows[0];
   if (!s) throw notFound('Article');
   const kinds = ['piece', 'box'];
@@ -139,7 +139,7 @@ export async function fillEans(ctx: Ctx, styleId: string) {
 
 /** Use a barcode that is already printed on a label (scanned in) instead of the one the system made. */
 export async function setEan(ctx: Ctx, i: { skuId: string; kind: 'piece' | 'box'; code: string }) {
-  await assertCan(ctx.db, ctx.actor.id, 'bom.create', ANY);
+  await assertCan(ctx.db, ctx.actor.id, 'article.edit', ANY);
   const code = (i.code ?? '').trim();
   if (!['piece', 'box'].includes(i.kind)) throw badRequest('Barcode kind: piece or box');
   if (!isEan13(code)) throw badRequest(`"${code}" is not a valid EAN-13 barcode (13 digits with a correct check digit)`);

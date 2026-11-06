@@ -47,7 +47,7 @@ export async function exportCsv(db: Db, userId: string, head: Head): Promise<{ c
  * replaces the one on that SKU (to use labels that are already printed). Colours, cups and sizes must already be on the article.
  */
 export async function importSkus(ctx: Ctx, csv: string, dryRun = false): Promise<md.ImportResult & { skipped: number }> {
-  await assertCan(ctx.db, ctx.actor.id, 'bom.create', ANY);
+  await assertCan(ctx.db, ctx.actor.id, 'article.edit', ANY);
   const { head, rows } = md.parseCsv(csv);
   for (const need of ['article', 'colour_code', 'size']) if (!head.includes(need)) throw badRequest(`Header must include "${need}". Expected: ${SKU_CSV}`);
   const errors: md.ImportResult['errors'] = []; let created = 0, skipped = 0, updated = 0;

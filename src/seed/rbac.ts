@@ -12,9 +12,9 @@ export const ROLES: Record<string, { description: string; perms: string[] }> = {
          perms: ['plan.view', 'plan.manage', 'bom.view', 'item.view', 'inventory.view', 'partner.view', 'po.view', 'production.view', 'production.create'] },
   MD: { description: 'Master-data steward / managing director',
         perms: ['org.create', 'org.edit', 'unit.create', 'item.create', 'item.edit', 'item.submit', 'item.view',
-                'partner.create', 'partner.submit', 'partner.view', 'partner.edit', 'mtype.manage', 'catalog.manage', 'bom.view', 'plan.view', 'bom.create', 'barcode.view', 'barcode.issue', 'barcode.print', 'barcode.layout', 'barcode.series', 'inventory.view', 'po.view', 'hr.salary.propose', 'hr.salary.approve', 'escalation.raise', 'escalation.senior', 'escalation.view'] },
+                'partner.create', 'partner.submit', 'partner.view', 'partner.edit', 'mtype.manage', 'catalog.manage', 'article.edit', 'bom.view', 'plan.view', 'bom.create', 'barcode.view', 'barcode.issue', 'barcode.print', 'barcode.layout', 'barcode.series', 'inventory.view', 'po.view', 'hr.salary.propose', 'hr.salary.approve', 'escalation.raise', 'escalation.senior', 'escalation.view'] },
   ENG: { description: 'Engineer / technical approver',
-         perms: ['item.create', 'item.edit', 'item.submit', 'item.approve', 'item.deactivate', 'item.view', 'catalog.manage', 'inventory.view', 'partner.view', 'bom.view', 'plan.view', 'bom.approve'] },
+         perms: ['item.create', 'item.edit', 'item.submit', 'item.approve', 'item.deactivate', 'item.view', 'catalog.manage', 'article.edit', 'inventory.view', 'partner.view', 'bom.view', 'plan.view', 'bom.approve'] },
   BUY: { description: 'Buyer',
          perms: ['bom.view', 'plan.view', 'po.create', 'po.edit', 'po.submit', 'po.amend', 'po.view', 'partner.create', 'partner.submit',
                  'partner.view', 'partner.edit', 'rate.propose', 'item.view', 'inventory.view', 'receipt.view'] },
@@ -46,7 +46,7 @@ export const ROLES: Record<string, { description: string; perms: string[] }> = {
   HRE: { description: 'HR executive (no salary access)',
          perms: ['hr.employee.view', 'hr.employee.create', 'hr.employee.edit', 'hr.attendance.view', 'hr.attendance.mark', 'hr.leave.view'] },
   OWN: { description: 'Business owner (sees everything, can override approvals)',
-         perms: ['ai.manage', 'bom.view', 'plan.view', 'production.view', 'barcode.view', 'owner.view', 'owner.override', 'escalation.raise', 'escalation.senior', 'escalation.view', 'audit.view', 'user.view',
+         perms: ['ai.manage', 'bom.view', 'plan.view', 'production.view', 'barcode.view', 'catalog.manage', 'article.edit', 'owner.view', 'owner.override', 'escalation.raise', 'escalation.senior', 'escalation.view', 'audit.view', 'user.view',
                  'inventory.view', 'po.view', 'item.view', 'partner.view', 'receipt.view', 'qc.view',
                  'hr.employee.view', 'hr.attendance.view', 'hr.leave.view', 'hr.payroll.view', 'hr.salary.view'] },
   SUP: { description: 'Line supervisor (own team)',
@@ -62,7 +62,7 @@ for (const [k, def] of Object.entries(ROLES)) {
 /** Display name for a permission key's area, used by the admin console. */
 export const AREAS: Record<string, string> = {
   user: 'Users', access: 'Access', role: 'Roles', site: 'Sites', audit: 'Audit', org: 'Organisation', unit: 'Units', item: 'Items',
-  partner: 'Vendors & clients', mtype: 'Material types', catalog: 'Brands, categories & colours', rate: 'Rates', po: 'Purchase orders', receipt: 'Receiving', qc: 'Quality', putaway: 'Putaway',
+  partner: 'Vendors & clients', mtype: 'Material types', catalog: 'Brands, categories & colours', article: 'Finished goods', rate: 'Rates', po: 'Purchase orders', receipt: 'Receiving', qc: 'Quality', putaway: 'Putaway',
   owner: 'Owner', plan: 'Production planning', production: 'Production', bom: 'Products & BOM', barcode: 'Barcodes & labels', ai: 'AI models & assistant', escalation: 'Escalations', reservation: 'Reservations', adjustment: 'Adjustments', location: 'Locations', inventory: 'Inventory', hr: 'HR & payroll',
 };
 
