@@ -16,8 +16,9 @@ const shim = {
     to(/(^|\/)migrate(\.js)?$/, 'ui/shims/migrate.ts');
   },
 };
-// The build id (and so the browser's demo database name) changes whenever a migration or a seed changes, so visitors get a fresh demo.
-const sigFiles = ['src/db/migrations', 'src/seed'].flatMap((d) => readdirSync(resolve(root, d)).filter((f) => /\.(sql|ts)$/.test(f)).sort().map((f) => resolve(root, d, f)));
+// The build id (and so the browser's demo database name) changes whenever a migration, a seed or the business rules that build the
+// demo data change, so visitors get a fresh demo that matches the code instead of yesterday's data.
+const sigFiles = ['src/db/migrations', 'src/seed', 'src/domain', 'src/core'].flatMap((d) => readdirSync(resolve(root, d)).filter((f) => /\.(sql|ts)$/.test(f)).sort().map((f) => resolve(root, d, f)));
 const sig = sigFiles.reduce((h, f) => h.update(readFileSync(f)), createHash('sha1')).digest('hex').slice(0, 12);
 await build({
   entryPoints: [resolve(root, 'ui/main.ts')],
