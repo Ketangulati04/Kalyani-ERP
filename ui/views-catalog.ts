@@ -57,7 +57,7 @@ export async function finishedView(): Promise<Raw> {
     if (!list) return null;
     const sel = st.sel && list.some((s) => s.id === st.sel) ? await bom.getStyle(db, uid(), st.sel) : null;
     const m = async (k: Kind) => (await cat.listMasters(db, uid(), k).catch(() => [])) as Row[];
-    return { list, sel, brands: await m('brand'), cats: await m('category'), colours: await m('colour'), create: await can(db, uid(), 'bom.create', ANY) };
+    return { list, sel, brands: await m('brand'), cats: await m('category'), colours: await m('colour'), create: await can(db, uid(), 'article.edit', ANY) };
   });
   if (!d) return denied('Finished goods', 'Every article you make and sell.', 'Your role cannot see finished goods.');
   const f = st.f; const q = f.q.trim().toLowerCase();
@@ -135,7 +135,7 @@ function detail(d: FD & { create: boolean }, sel: Awaited<ReturnType<typeof bom.
     ${s.description ? html`<p>${s.description}</p>` : ''}`;
   return html`<section class="card" id="ct-detail"><div class="row between"><h2>${s.code} · ${s.name} ${sChip(s.status)}</h2>
     <div class="row">${d.create ? html`<button class="primary" data-act="ct-edit-art">Edit article</button>` : ''}<button data-act="ct-close">Close</button></div></div>
-    ${info}${d.create ? '' : html`<p class="sub">Only the master-data steward or the engineer can change articles.</p>`}
+    ${info}${d.create ? '' : html`<p class="sub">Only the business owner, the master-data steward or the engineer can change articles.</p>`}
     ${d.create ? html`<div class="row">${missing > 0 && s.status !== 'disable' ? html`<button data-act="ct-skus">Make ${missing} missing SKU${missing === 1 ? '' : 's'}</button>` : ''}${noBc ? html`<button data-act="ct-bc">Make missing barcodes</button>` : ''}</div>` : ''}
     <p class="sub">Status: ${STATUS_LABEL[s.status]} — ${cat.ARTICLE_STATUS[s.status]}.</p>
     <h3>SKUs and barcodes</h3><p class="sub">Every SKU has a piece barcode and a box barcode${pk ? ` (the box of ${s.pcs_per_pack})` : ''}, made automatically: EAN-13 under the GS1 prefix ${cat.EAN_PREFIX.slice(0, 3)} ${cat.EAN_PREFIX.slice(3)} (a sample prefix until yours is set), never repeated. To use a label that is already printed, scan or type its barcode over the one shown. For many at once, use the SKU CSV above.</p>

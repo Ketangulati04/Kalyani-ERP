@@ -116,6 +116,18 @@ describe('finished-goods articles (the CRM article master)', () => {
     expect((await bom.checkBom(w.pool, b.id)).problems.join(' ')).toContain('would get no materials');
     void saved;
   });
+  it('the business owner, master-data steward and engineer may edit articles; others may only look', async () => {
+    const kly = await idOf('brand', 'KLY');
+    const o = await w.as('own', (c) => bom.createStyle(c, { code: 'KL-160', name: 'Owner tee', brandId: kly, colours: ['WHT'], sizes: ['34/L'] }));
+    expect((await w.as('own', (c) => bom.createSkus(c, { styleId: o.id }))).barcodes).toBe(2);
+    await w.as('own', async (c) => bom.updateStyle(c, { styleId: o.id, expectedVersion: o.version, mrp: '299' }));
+    await w.as('own', (c) => cat.createMaster(c, 'colour', { code: 'BGE', name: 'Beige' }));
+    const e = await w.as('eng', (c) => bom.createStyle(c, { code: 'KL-161', name: 'Engineer tee', colours: ['BGE'], sizes: ['34/L'] }));
+    expect(e.code).toBe('KL-161');
+    await rejects(w.as('sto', (c) => bom.createStyle(c, { code: 'KL-162', name: 'Store tee', colours: ['WHT'], sizes: ['34/L'] })), 'article.edit');
+    await rejects(w.as('own', (c) => bom.startBom(c, { styleId: o.id })), 'bom.create');          // editing articles does not mean building BOMs
+    expect((await bom.listStyles(w.pool, uid('sto'))).some((x) => x.code === 'KL-160')).toBe(true); // the storekeeper can still look
+  });
   it('closed and disabled articles are not planned; a disabled one makes no SKUs', async () => {
     const brf = await idOf('product_style', 'BRF-01');
     const skuItem = (await w.pool.query(`SELECT item_id FROM sku WHERE code='BRF-01-BLK-M'`)).rows[0].item_id;
